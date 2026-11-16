@@ -1,0 +1,5 @@
+[package]
+name = "volt_lexer"
+description = "Volt: Quelltext → Tokens (mit INDENT/DEDENT) und die gemeinsamen Fehlermeldungs-Typen"
+version.workspace = true
+edition.workspace = true
