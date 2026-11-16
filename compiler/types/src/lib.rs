@@ -1,129 +1,507 @@
-//! Typprüfung: trägt die Typen in den AST ein und sammelt alle Fehler.
+//! Typprüfung: trägt die Typen in den AST ein, löst Namen auf und sammelt alle Fehler.
+//! Aufrufe, Feldzugriffe und Enum-Fälle werden dabei in aufgelöste Formen umgeschrieben
+//! (`ExprKind::Invoke`, `ExprKind::Variant`), Werte für `T?`/`T!` in `ExprKind::Wrap` verpackt.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use volt_lexer::{Diag, Span};
 use volt_parser::ast::*;
 
+/// Eine Quelldatei. Das Hauptprogramm hat den leeren Namen, Module (`use name`) ihren Dateinamen.
+pub struct Unit {
+    pub name: String,
+    pub module: Module,
+}
+
 #[derive(Clone)]
-struct FnSig {
+struct Sig {
+    this: Option<SelfKind>,
     params: Vec<Type>,
     ret: Type,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
+struct FieldInfo {
+    name: String,
+    ty: Type,
+    default: Option<Expr>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Struct,
+    Enum,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 enum VarKind {
     Let,
     Var,
     Param,
     Loop,
+    SelfVal,
+    SelfMut,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Var {
     ty: Type,
     kind: VarKind,
 }
 
+/// Eingebaute Funktionen – diese Namen sind für eigene Funktionen tabu.
+const BUILTINS: &[&str] = &["print", "input", "error", "int", "float", "sqrt", "abs", "exit"];
+const TYPE_NAMES: &[&str] = &["int", "f64", "bool", "str", "List", "Map"];
+
+/// Wozu ein Name wie `modul.Typ.Fall` gehört.
+enum PathRes {
+    Module,
+    Type(String, Kind),
+    Fn(String),
+    Variant(String, usize),
+    /// Methode über den Typnamen: `Player.new`.
+    Static(String),
+    Missing,
+}
+
 struct Checker {
-    fns: HashMap<String, FnSig>,
+    /// Name und `use`-Liste je Datei.
+    units: Vec<(String, HashSet<String>)>,
+    types: HashMap<String, Kind>,
+    structs: HashMap<String, Vec<FieldInfo>>,
+    variants: HashMap<String, Vec<(String, Vec<FieldInfo>)>>,
+    /// Freie Funktionen (`f`, `modul.f`) und Methoden (`Typ.m`).
+    fns: HashMap<String, Sig>,
+    unit: usize,
     /// Sichtbare Variablen, innerster Block zuletzt.
     scopes: Vec<HashMap<String, Var>>,
     /// Rückgabetyp der Funktion, die gerade geprüft wird.
     ret: Type,
-    diags: Vec<Diag>,
+    loops: u32,
+    diags: Vec<(usize, Diag)>,
 }
 
-/// Prüft das Programm. Ohne Fehler sind danach alle `ty`-Felder im AST gesetzt.
+/// Prüft ein einzelnes Programm ohne Module.
 pub fn check(m: &mut Module) -> Vec<Diag> {
-    let mut c = Checker { fns: HashMap::new(), scopes: Vec::new(), ret: Type::Void, diags: Vec::new() };
-    // Zuerst alle Signaturen: Funktionen dürfen sich in beliebiger Reihenfolge aufrufen.
-    for f in &mut m.fns {
-        for p in &mut f.params {
-            p.ty = c.resolve(&p.ty_ref);
+    let mut units = vec![Unit { name: String::new(), module: std::mem::take(m) }];
+    let diags = check_program(&mut units);
+    *m = units.pop().expect("eine Datei").module;
+    diags.into_iter().map(|(_, d)| d).collect()
+}
+
+/// Prüft das Hauptprogramm (`units[0]`) samt Modulen. Jeder Fehler nennt den Index seiner Datei.
+pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
+    let mut c = Checker {
+        units: units.iter().map(|u| (u.name.clone(), u.module.uses.iter().map(|(n, _)| n.clone()).collect())).collect(),
+        types: HashMap::new(),
+        structs: HashMap::new(),
+        variants: HashMap::new(),
+        fns: HashMap::new(),
+        unit: 0,
+        scopes: Vec::new(),
+        ret: Type::Void,
+        loops: 0,
+        diags: Vec::new(),
+    };
+    let names: HashSet<String> = units.iter().map(|u| u.name.clone()).collect();
+    // 1. Typnamen, damit Felder und Signaturen sich auf alle Typen beziehen können.
+    for (ui, u) in units.iter_mut().enumerate() {
+        c.unit = ui;
+        for (name, span) in &u.module.uses {
+            if !names.contains(name) {
+                c.err(Diag::new(*span, format!("das Modul `{name}` gibt es nicht")).tip(format!("lege `{name}.vt` neben diese Datei")));
+            }
         }
-        f.ret = f.ret_ref.as_ref().map_or(Type::Void, |r| c.resolve(r));
-        let sig = FnSig { params: f.params.iter().map(|p| p.ty).collect(), ret: f.ret };
-        if f.name == "print" {
-            c.diags.push(Diag::new(f.span, "`print` ist schon eingebaut").tip("gib deiner Funktion einen anderen Namen"));
-        } else if c.fns.insert(f.name.clone(), sig).is_some() {
-            c.diags.push(Diag::new(f.span, format!("die Funktion `{}` gibt es schon", f.name)));
+        for s in &mut u.module.structs {
+            s.key = c.qual(&s.name);
+            c.add_type(&s.name, &s.key, Kind::Struct, s.span);
+        }
+        for e in &mut u.module.enums {
+            e.key = c.qual(&e.name);
+            c.add_type(&e.name, &e.key, Kind::Enum, e.span);
         }
     }
-    match m.fns.iter().find(|f| f.name == "main") {
-        None => c.diags.push(Diag::new(Span { line: 1, col: 1, len: 1 }, "keine `fn main()` gefunden").tip("jedes Programm startet in `fn main()`")),
-        Some(f) if !f.params.is_empty() || f.ret_ref.is_some() => {
-            c.diags.push(Diag::new(f.span, "`main` hat keine Parameter und keinen Rückgabewert").tip("schreibe `fn main()`"));
+    // 2. Felder, Fälle und Signaturen.
+    for (ui, u) in units.iter_mut().enumerate() {
+        c.unit = ui;
+        for s in &mut u.module.structs {
+            let fields = c.fields(&mut s.fields, &s.name);
+            c.structs.insert(s.key.clone(), fields);
+            for m in &mut s.methods {
+                c.signature(m, Some(&s.key));
+            }
+        }
+        for e in &mut u.module.enums {
+            let mut variants = Vec::new();
+            for v in &mut e.variants {
+                if variants.iter().any(|(n, _)| *n == v.name) {
+                    c.err(Diag::new(v.span, format!("den Fall `{}` gibt es schon", v.name)));
+                }
+                let fields = c.fields(&mut v.fields, &v.name);
+                variants.push((v.name.clone(), fields));
+            }
+            c.variants.insert(e.key.clone(), variants);
+            for m in &mut e.methods {
+                c.signature(m, Some(&e.key));
+            }
+        }
+        for f in &mut u.module.fns {
+            c.signature(f, None);
+        }
+    }
+    // 3. Ein Typ darf sich nicht selbst (direkt oder über andere) als Wert enthalten.
+    for (ui, u) in units.iter().enumerate() {
+        c.unit = ui;
+        for (key, span) in u.module.structs.iter().map(|s| (&s.key, s.span)).chain(u.module.enums.iter().map(|e| (&e.key, e.span))) {
+            if c.contains_itself(key) {
+                c.err(Diag::new(span, format!("`{key}` enthält sich selbst")).tip(format!("ein Wert wäre unendlich groß – nutze `List[{key}]`")));
+            }
+        }
+    }
+    // 4. Standardwerte der Felder.
+    for (ui, u) in units.iter_mut().enumerate() {
+        c.unit = ui;
+        for s in &mut u.module.structs {
+            c.defaults(&mut s.fields, &s.key, None);
+        }
+        for e in &mut u.module.enums {
+            for (i, v) in e.variants.iter_mut().enumerate() {
+                c.defaults(&mut v.fields, &e.key, Some(i));
+            }
+        }
+    }
+    // 5. `main` im Hauptprogramm.
+    c.unit = 0;
+    match units[0].module.fns.iter().find(|f| f.name == "main") {
+        None => c.err(Diag::new(Span { line: 1, col: 1, len: 1 }, "keine `fn main()` gefunden").tip("jedes Programm startet in `fn main()`")),
+        Some(f) if !f.params.is_empty() || !matches!(&f.ret, Type::Void | Type::Unknown) && f.ret != Type::Res(Box::new(Type::Void)) => {
+            c.err(Diag::new(f.span, "`main` hat keine Parameter und keinen Rückgabewert").tip("schreibe `fn main()` – oder `fn main() -> !`, wenn Fehler herauskommen dürfen"));
         }
         Some(_) => {}
     }
-    for f in &mut m.fns {
-        c.function(f);
+    // 6. Die Rümpfe.
+    for (ui, u) in units.iter_mut().enumerate() {
+        c.unit = ui;
+        for s in &mut u.module.structs {
+            for m in &mut s.methods {
+                c.function(m, Some(&s.key));
+            }
+        }
+        for e in &mut u.module.enums {
+            for m in &mut e.methods {
+                c.function(m, Some(&e.key));
+            }
+        }
+        for f in &mut u.module.fns {
+            c.function(f, None);
+        }
     }
-    // `x += 1` mit unbekanntem `x` meldet denselben Fehler für Ziel und Wert.
-    c.diags.dedup_by(|a, b| a.span == b.span && a.msg == b.msg);
+    // `x += 1` mit unbekanntem `x` meldet sonst denselben Fehler zweimal.
+    c.diags.dedup_by(|a, b| a.0 == b.0 && a.1.span == b.1.span && a.1.msg == b.1.msg);
     c.diags
 }
 
-/// Gibt dieser Block auf jedem Weg einen Wert zurück?
-fn returns(stmts: &[Stmt]) -> bool {
+/// Verlässt dieser Block auf jedem Weg die Funktion (oder mit `loops` auch die Schleifenrunde)?
+fn exits(stmts: &[Stmt], loops: bool) -> bool {
     stmts.iter().any(|s| match s {
         Stmt::Return { .. } => true,
-        Stmt::If { then, els, .. } => returns(then) && returns(els),
+        Stmt::Break(_) | Stmt::Continue(_) => loops,
+        Stmt::If { then, els, .. } | Stmt::IfLet { then, els, .. } => exits(then, loops) && exits(els, loops),
+        Stmt::Match { arms, .. } => !arms.is_empty() && arms.iter().all(|a| exits(&a.body, loops)),
+        Stmt::Expr(Expr { kind: ExprKind::Invoke { target: Target::Builtin("exit"), .. }, .. }) => true,
         _ => false,
     })
 }
 
+/// Kurzer Text für ein Zuweisungsziel in Meldungen: `x`, `p.hp`, `xs[…]`.
+fn text(e: &Expr) -> String {
+    match &e.kind {
+        ExprKind::Ident(n) => n.clone(),
+        ExprKind::Field(x, n) => format!("{}.{n}", text(x)),
+        ExprKind::Index(x, _) => format!("{}[…]", text(x)),
+        _ => "der Wert".into(),
+    }
+}
+
+fn take(e: &mut Expr) -> ExprKind {
+    std::mem::replace(&mut e.kind, ExprKind::Bool(false))
+}
+
+/// Eingebaute Methoden: Name der Methode → (Kennung fürs Backend, Parameter, Rückgabe).
+fn builtin_method(recv: &Type, name: &str) -> Option<(&'static str, Vec<Type>, Type)> {
+    use Type::*;
+    let opt = |t: &Type| Opt(Box::new(t.clone()));
+    Some(match (recv, name) {
+        (Str, "len") => ("str.len", vec![], Int),
+        (Str, "upper") => ("str.upper", vec![], Str),
+        (Str, "lower") => ("str.lower", vec![], Str),
+        (Str, "trim") => ("str.trim", vec![], Str),
+        (Str, "contains") => ("str.contains", vec![Str], Bool),
+        (Str, "starts_with") => ("str.starts_with", vec![Str], Bool),
+        (Str, "ends_with") => ("str.ends_with", vec![Str], Bool),
+        (Str, "split") => ("str.split", vec![Str], List(Box::new(Str))),
+        (Str, "replace") => ("str.replace", vec![Str, Str], Str),
+        (Str, "to_int") => ("str.to_int", vec![], opt(&Int)),
+        (Str, "to_f64") => ("str.to_f64", vec![], opt(&F64)),
+        (List(_), "len") => ("list.len", vec![], Int),
+        (List(t), "push") => ("list.push", vec![(**t).clone()], Void),
+        (List(t), "pop") => ("list.pop", vec![], opt(t)),
+        (List(t), "remove") => ("list.remove", vec![Int], (**t).clone()),
+        (List(t), "insert") => ("list.insert", vec![Int, (**t).clone()], Void),
+        (List(_), "clear") => ("list.clear", vec![], Void),
+        (List(t), "contains") if t.is_prim() => ("list.contains", vec![(**t).clone()], Bool),
+        (List(t), "join") if **t == Str => ("list.join", vec![Str], Str),
+        (Map(..), "len") => ("map.len", vec![], Int),
+        (Map(k, _), "has") => ("map.has", vec![(**k).clone()], Bool),
+        (Map(k, v), "get") => ("map.get", vec![(**k).clone()], opt(v)),
+        (Map(k, _), "remove") => ("map.remove", vec![(**k).clone()], Void),
+        (Map(k, _), "keys") => ("map.keys", vec![], List(k.clone())),
+        (Opt(t) | Res(t), "or") if **t != Void => ("opt.or", vec![(**t).clone()], (**t).clone()),
+        _ => return Option::None,
+    })
+}
+
+fn methods_of(recv: &Type) -> &'static str {
+    match recv {
+        Type::Str => "len, upper, lower, trim, contains, starts_with, ends_with, split, replace, to_int, to_f64",
+        Type::List(_) => "len, push, pop, remove, insert, clear, contains, join",
+        Type::Map(..) => "len, has, get, remove, keys",
+        Type::Opt(_) | Type::Res(_) => "or",
+        _ => "",
+    }
+}
+
 impl Checker {
-    fn resolve(&mut self, t: &TypeRef) -> Type {
-        match t.name.as_str() {
-            "int" => Type::Int,
-            "f64" => Type::F64,
-            "bool" => Type::Bool,
-            "str" => Type::Str,
-            other => {
-                self.diags.push(Diag::new(t.span, format!("den Typ `{other}` gibt es nicht")).tip("Volt kennt bisher: int, f64, bool, str"));
-                Type::Unknown
+    fn err(&mut self, d: Diag) {
+        self.diags.push((self.unit, d));
+    }
+
+    /// Voller Name eines Eintrags der aktuellen Datei.
+    fn qual(&self, name: &str) -> String {
+        let unit = &self.units[self.unit].0;
+        if unit.is_empty() { name.to_string() } else { format!("{unit}.{name}") }
+    }
+
+    fn uses(&self, module: &str) -> bool {
+        self.units[self.unit].1.contains(module)
+    }
+
+    fn add_type(&mut self, name: &str, key: &str, kind: Kind, span: Span) {
+        if TYPE_NAMES.contains(&name) {
+            self.err(Diag::new(span, format!("`{name}` ist schon eingebaut")).tip("gib deinem Typ einen anderen Namen"));
+        } else if self.uses(name) {
+            self.err(Diag::new(span, format!("`{name}` ist schon ein Modul")));
+        } else if self.types.insert(key.to_string(), kind).is_some() {
+            self.err(Diag::new(span, format!("den Typ `{name}` gibt es schon")));
+        }
+    }
+
+    fn fields(&mut self, fields: &mut [Field], owner: &str) -> Vec<FieldInfo> {
+        let mut out: Vec<FieldInfo> = Vec::new();
+        for f in fields {
+            f.ty = self.resolve(&f.ty_ref);
+            if out.iter().any(|o| o.name == f.name) {
+                self.err(Diag::new(f.span, format!("`{owner}` hat schon ein Feld `{}`", f.name)));
+            }
+            out.push(FieldInfo { name: f.name.clone(), ty: f.ty.clone(), default: None });
+        }
+        out
+    }
+
+    fn defaults(&mut self, fields: &mut [Field], key: &str, variant: Option<usize>) {
+        for (i, f) in fields.iter_mut().enumerate() {
+            let Some(d) = &mut f.default else { continue };
+            self.scopes.push(HashMap::new());
+            self.value(d);
+            self.scopes.pop();
+            let name = f.name.clone();
+            self.coerce(d, &f.ty, |w, g| format!("der Standardwert von `{name}` soll {w} sein, ist aber {g}"));
+            let slot = match variant {
+                None => self.structs.get_mut(key).map(|fs| &mut fs[i]),
+                Some(v) => self.variants.get_mut(key).map(|vs| &mut vs[v].1[i]),
+            };
+            if let Some(slot) = slot {
+                slot.default = Some(d.clone());
             }
         }
     }
 
+    fn signature(&mut self, f: &mut FnDecl, owner: Option<&str>) {
+        for p in &mut f.params {
+            p.ty = self.resolve(&p.ty_ref);
+        }
+        f.ret = f.ret_ref.as_ref().map_or(Type::Void, |r| self.resolve(r));
+        f.key = match owner {
+            Some(o) => format!("{o}.{}", f.name),
+            None => self.qual(&f.name),
+        };
+        let sig = Sig { this: f.this, params: f.params.iter().map(|p| p.ty.clone()).collect(), ret: f.ret.clone() };
+        if owner.is_none() && BUILTINS.contains(&f.name.as_str()) {
+            self.err(Diag::new(f.span, format!("`{}` ist schon eingebaut", f.name)).tip("gib deiner Funktion einen anderen Namen"));
+        } else if owner.is_none() && self.types.contains_key(&f.key) {
+            self.err(Diag::new(f.span, format!("`{}` ist schon ein Typ", f.name)));
+        } else if self.fns.insert(f.key.clone(), sig).is_some() {
+            let what = if owner.is_some() { "Methode" } else { "Funktion" };
+            self.err(Diag::new(f.span, format!("die {what} `{}` gibt es schon", f.name)));
+        }
+    }
+
+    /// Typ zu einem Namen wie `Player` oder `modul.Player`.
+    fn type_key(&self, name: &str) -> Option<(String, Kind)> {
+        let key = match name.split_once('.') {
+            Some((module, _)) if self.uses(module) => name.to_string(),
+            Some(_) => return None,
+            None => self.qual(name),
+        };
+        self.types.get(&key).map(|k| (key, *k))
+    }
+
+    fn resolve(&mut self, t: &TypeRef) -> Type {
+        let mut ty = match (t.name.as_str(), t.args.len()) {
+            ("", _) => Type::Void,
+            ("int", 0) => Type::Int,
+            ("f64", 0) => Type::F64,
+            ("bool", 0) => Type::Bool,
+            ("str", 0) => Type::Str,
+            ("List", 1) => Type::List(Box::new(self.resolve(&t.args[0]))),
+            ("Map", 2) => {
+                let k = self.resolve(&t.args[0]);
+                if !matches!(k, Type::Int | Type::Str | Type::Unknown) {
+                    self.err(Diag::new(t.args[0].span, format!("Schlüssel einer Map sind int oder str, nicht {}", k.name())));
+                }
+                Type::Map(Box::new(k), Box::new(self.resolve(&t.args[1])))
+            }
+            ("List", _) => {
+                self.err(Diag::new(t.span, "`List` braucht genau einen Typ").tip("z. B. `List[int]`"));
+                Type::Unknown
+            }
+            ("Map", _) => {
+                self.err(Diag::new(t.span, "`Map` braucht zwei Typen").tip("z. B. `Map[str, int]`"));
+                Type::Unknown
+            }
+            (name, n) => match self.type_key(name) {
+                Some(_) if n > 0 => {
+                    self.err(Diag::new(t.span, format!("`{name}` hat keine Typ-Parameter")));
+                    Type::Unknown
+                }
+                Some((key, Kind::Struct)) => Type::Struct(key),
+                Some((key, Kind::Enum)) => Type::Enum(key),
+                None => {
+                    self.err(Diag::new(t.span, format!("den Typ `{name}` gibt es nicht")).tip("Volt kennt int, f64, bool, str, List[…], Map[…, …] und eigene `struct`s und `enum`s"));
+                    Type::Unknown
+                }
+            },
+        };
+        for c in &t.suffix {
+            if ty == Type::Void && *c == '?' {
+                self.err(Diag::new(t.span, "`?` braucht einen Typ davor").tip("z. B. `int?`"));
+                return Type::Unknown;
+            }
+            ty = if *c == '?' { Type::Opt(Box::new(ty)) } else { Type::Res(Box::new(ty)) };
+        }
+        ty
+    }
+
+    /// Enthält `key` sich selbst als Wert (nicht über List oder Map)?
+    fn contains_itself(&self, key: &str) -> bool {
+        fn walk(c: &Checker, t: &Type, target: &str, seen: &mut HashSet<String>) -> bool {
+            match t {
+                Type::Opt(t) | Type::Res(t) => walk(c, t, target, seen),
+                Type::Struct(k) | Type::Enum(k) => {
+                    if k == target {
+                        return true;
+                    }
+                    if !seen.insert(k.clone()) {
+                        return false;
+                    }
+                    let fields: Vec<&FieldInfo> = match c.structs.get(k) {
+                        Some(fs) => fs.iter().collect(),
+                        None => c.variants.get(k).map(|vs| vs.iter().flat_map(|v| &v.1).collect()).unwrap_or_default(),
+                    };
+                    fields.iter().any(|f| walk(c, &f.ty, target, seen))
+                }
+                _ => false,
+            }
+        }
+        let fields: Vec<&FieldInfo> = match self.structs.get(key) {
+            Some(fs) => fs.iter().collect(),
+            None => self.variants.get(key).map(|vs| vs.iter().flat_map(|v| &v.1).collect()).unwrap_or_default(),
+        };
+        let mut seen = HashSet::new();
+        fields.iter().any(|f| walk(self, &f.ty, key, &mut seen))
+    }
+
     fn lookup(&self, name: &str) -> Option<Var> {
-        self.scopes.iter().rev().find_map(|s| s.get(name)).copied()
+        self.scopes.iter().rev().find_map(|s| s.get(name)).cloned()
     }
 
     fn declare(&mut self, name: &str, span: Span, ty: Type, kind: VarKind) {
+        if name == "_" {
+            return;
+        }
         if self.lookup(name).is_some() {
-            self.diags.push(
-                Diag::new(span, format!("`{name}` gibt es hier schon")).tip("nimm einen anderen Namen – in Volt steht ein Name immer für genau eine Variable"),
-            );
-        } else if name == "print" || self.fns.contains_key(name) {
-            self.diags.push(Diag::new(span, format!("`{name}` ist schon eine Funktion")).tip("nimm für die Variable einen anderen Namen"));
+            self.err(Diag::new(span, format!("`{name}` gibt es hier schon")).tip("nimm einen anderen Namen – in Volt steht ein Name immer für genau eine Variable"));
+        } else if BUILTINS.contains(&name) || self.fns.contains_key(&self.qual(name)) {
+            self.err(Diag::new(span, format!("`{name}` ist schon eine Funktion")).tip("nimm für die Variable einen anderen Namen"));
+        } else if self.type_key(name).is_some() || self.uses(name) {
+            self.err(Diag::new(span, format!("`{name}` ist schon ein Typ oder Modul")).tip("nimm für die Variable einen anderen Namen"));
         }
         self.scopes.last_mut().expect("Variablen gibt es nur in Funktionen").insert(name.to_string(), Var { ty, kind });
     }
 
-    /// Meldet einen Fehler, wenn `got` nicht dorthin passt, wo `want` erwartet wird. int wird automatisch zu f64.
-    fn expect(&mut self, want: Type, got: Type, span: Span, msg: impl FnOnce(&str, &str) -> String) {
-        if want == got || want == Type::Unknown || got == Type::Unknown || (want == Type::F64 && got == Type::Int) {
-            return;
+    /// Passt `got` dorthin, wo `want` erwartet wird? int wird automatisch zu f64, Werte zu `T?`/`T!`.
+    fn fits(want: &Type, got: &Type) -> bool {
+        match (want, got) {
+            (Type::Unknown, _) | (_, Type::Unknown) => true,
+            (Type::F64, Type::Int) => true,
+            (Type::Opt(_), Type::None) | (Type::Res(_), Type::Error) => true,
+            (Type::Opt(t), g) | (Type::Res(t), g) if want != got => **t != Type::Void && Self::fits(t, g),
+            _ => want == got,
         }
-        let mut d = Diag::new(span, msg(want.name(), got.name()));
-        if want == Type::Int && got == Type::F64 {
-            d = d.tip("f64 wird nicht automatisch zu int – die Nachkommastellen gingen verloren");
-        }
-        self.diags.push(d);
     }
 
-    fn function(&mut self, f: &mut FnDecl) {
-        self.ret = f.ret;
+    /// Prüft `e` gegen `want` und verpackt den Wert, wenn er in ein `T?` oder `T!` wandert.
+    fn coerce(&mut self, e: &mut Expr, want: &Type, msg: impl FnOnce(&str, &str) -> String) -> bool {
+        if !Self::fits(want, &e.ty) {
+            let mut d = Diag::new(e.span, msg(&want.name(), &e.ty.name()));
+            if *want == Type::Int && e.ty == Type::F64 {
+                d = d.tip("f64 wird nicht automatisch zu int – nutze `int(x)`, dann fallen die Nachkommastellen weg");
+            } else if matches!((want, &e.ty), (Type::Opt(t) | Type::Res(t), g) if **t == *g) {
+            } else if let (_, Type::Opt(t) | Type::Res(t)) = (want, &e.ty) {
+                if Self::fits(want, t) {
+                    d = d.tip("der Wert kann fehlen – pack ihn mit `if let`, `let … else`, `?` oder `.or(…)` aus");
+                }
+            }
+            self.err(d);
+            return false;
+        }
+        if matches!(want, Type::Opt(_) | Type::Res(_)) && *want != e.ty && e.ty != Type::Unknown {
+            let span = e.span;
+            let inner = std::mem::replace(e, Expr { kind: ExprKind::Bool(false), span, ty: Type::Unknown });
+            *e = Expr { kind: ExprKind::Wrap(Box::new(inner)), span, ty: want.clone() };
+        }
+        true
+    }
+
+    fn function(&mut self, f: &mut FnDecl, owner: Option<&str>) {
+        self.ret = f.ret.clone();
+        self.loops = 0;
         self.scopes.push(HashMap::new());
+        if let (Some(this), Some(owner)) = (f.this, owner) {
+            let ty = match self.types.get(owner) {
+                Some(Kind::Struct) => Type::Struct(owner.to_string()),
+                _ => Type::Enum(owner.to_string()),
+            };
+            let kind = if this == SelfKind::Mut { VarKind::SelfMut } else { VarKind::SelfVal };
+            self.scopes.last_mut().unwrap().insert("self".into(), Var { ty, kind });
+        }
         for p in &f.params {
-            self.declare(&p.name, p.span, p.ty, VarKind::Param);
+            self.declare(&p.name, p.span, p.ty.clone(), VarKind::Param);
         }
         self.block(&mut f.body);
         self.scopes.pop();
-        if !matches!(f.ret, Type::Void | Type::Unknown) && !returns(&f.body) {
-            self.diags.push(
+        let void = matches!(&f.ret, Type::Void | Type::Unknown) || f.ret == Type::Res(Box::new(Type::Void));
+        if !void && !exits(&f.body, false) {
+            self.err(
                 Diag::new(f.span, format!("`{}` gibt nicht auf jedem Weg einen Wert zurück", f.name))
                     .tip(format!("beende die Funktion mit `return …` ({})", f.ret.name())),
             );
@@ -145,30 +523,63 @@ impl Checker {
                 *ty = match ty_ref {
                     Some(r) => {
                         let want = self.resolve(r);
-                        self.expect(want, got, init.span, |w, g| format!("`{name}` soll {w} sein, der Wert ist aber {g}"));
+                        self.coerce(init, &want, |w, g| format!("`{name}` soll {w} sein, der Wert ist aber {g}"));
                         want
+                    }
+                    None if matches!(got, Type::None | Type::Error) => {
+                        self.err(Diag::new(init.span, format!("bei `{}` ist unklar, welcher Typ gemeint ist", got.name())).tip(format!("gib den Typ an, z. B. `let {name}: int? = none`")));
+                        Type::Unknown
                     }
                     None => got,
                 };
-                self.declare(name, *span, *ty, if *mutable { VarKind::Var } else { VarKind::Let });
+                self.declare(name, *span, ty.clone(), if *mutable { VarKind::Var } else { VarKind::Let });
             }
-            Stmt::Assign { name, span, value } => {
-                let target = self.lookup(name);
-                match target.map(|v| v.kind) {
-                    None => self.diags.push(Diag::new(*span, format!("`{name}` gibt es hier nicht")).tip(format!("lege die Variable zuerst an: `var {name} = …`"))),
-                    Some(VarKind::Var) => {}
-                    Some(kind) => {
-                        let tip = match kind {
-                            VarKind::Param => format!("Parameter sind fest – kopiere den Wert in eine eigene Variable, z. B. `var wert = {name}`"),
-                            VarKind::Loop => "die Schleifenvariable setzt Volt selbst – nutze dafür eine eigene `var`".to_string(),
-                            _ => format!("nutze `var {name} = …`, wenn sich der Wert ändern soll"),
-                        };
-                        self.diags.push(Diag::new(*span, format!("`{name}` ist unveränderlich")).tip(tip));
+            Stmt::LetElse { name, span, init, err, els } => {
+                let got = self.value(init);
+                let ty = match &got {
+                    Type::Opt(t) => {
+                        if let Some((e, at)) = err {
+                            self.err(Diag::new(*at, format!("`none` hat keinen Fehlertext – `{e}` gibt es hier nicht")).tip("schreibe nur `else`"));
+                        }
+                        (**t).clone()
                     }
+                    Type::Res(t) => (**t).clone(),
+                    Type::Unknown => Type::Unknown,
+                    other => {
+                        self.err(Diag::new(init.span, format!("`let … else` braucht einen Wert, der fehlen kann (T? oder T!), das hier ist {}", other.name())).tip("dann reicht ein normales `let`"));
+                        Type::Unknown
+                    }
+                };
+                if ty == Type::Void && name != "_" {
+                    self.err(Diag::new(init.span, "hier kommt kein Wert heraus, nur vielleicht ein Fehler").tip(format!("schreibe `let _ = … else {}`", err.as_ref().map_or("err", |e| e.0.as_str()))));
                 }
+                self.scopes.push(HashMap::new());
+                if let (Some((e, at)), Type::Res(_)) = (err, &got) {
+                    self.declare(e, *at, Type::Str, VarKind::Let);
+                }
+                self.block(els);
+                self.scopes.pop();
+                if !exits(els, self.loops > 0) {
+                    self.err(Diag::new(*span, "der `else`-Block muss hier aufhören").tip("beende ihn mit `return`, `break` oder `continue` – danach gäbe es sonst keinen Wert"));
+                }
+                self.declare(name, *span, ty, VarKind::Let);
+            }
+            Stmt::Assign { target, op, value } => {
+                let target_ty = self.expr(target);
+                self.check_mut(target, "zuweisen");
                 let got = self.value(value);
-                if let Some(var) = target {
-                    self.expect(var.ty, got, value.span, |w, g| format!("`{name}` ist {w}, der neue Wert ist aber {g}"));
+                let what = text(target);
+                match op {
+                    Some(op) => {
+                        let span = value.span;
+                        let result = self.binary(*op, &target_ty, &got, span);
+                        if !Self::fits(&target_ty, &result) {
+                            self.err(Diag::new(span, format!("`{what}` ist {}, der neue Wert ist aber {}", target_ty.name(), result.name())));
+                        }
+                    }
+                    None => {
+                        self.coerce(value, &target_ty, |w, g| format!("`{what}` ist {w}, der neue Wert ist aber {g}"));
+                    }
                 }
             }
             Stmt::If { cond, then, els } => {
@@ -176,48 +587,171 @@ impl Checker {
                 self.block(then);
                 self.block(els);
             }
+            Stmt::IfLet { name, span, value, then, els } => {
+                let got = self.value(value);
+                let ty = match got {
+                    Type::Opt(t) | Type::Res(t) if *t != Type::Void => *t,
+                    Type::Unknown => Type::Unknown,
+                    other => {
+                        self.err(Diag::new(value.span, format!("`if let` braucht einen Wert, der fehlen kann (T? oder T!), das hier ist {}", other.name())));
+                        Type::Unknown
+                    }
+                };
+                self.scopes.push(HashMap::new());
+                self.declare(name, *span, ty, VarKind::Let);
+                self.block(then);
+                self.scopes.pop();
+                self.block(els);
+            }
             Stmt::While { cond, body } => {
                 self.cond(cond);
-                self.block(body);
+                self.loop_body(body, None);
             }
             Stmt::For { var, span, start, end, body } => {
-                for bound in [start, end] {
-                    let got = self.value(bound);
-                    self.expect(Type::Int, got, bound.span, |_, g| format!("der Bereich braucht int-Werte, das hier ist {g}"));
-                }
-                self.scopes.push(HashMap::new());
-                self.declare(var, *span, Type::Int, VarKind::Loop);
-                self.block(body);
-                self.scopes.pop();
+                let ty = match end {
+                    Some(end) => {
+                        for bound in [&mut *start, end] {
+                            let got = self.value(bound);
+                            if !matches!(got, Type::Int | Type::Unknown) {
+                                self.err(Diag::new(bound.span, format!("der Bereich braucht int-Werte, das hier ist {}", got.name())));
+                            }
+                        }
+                        Type::Int
+                    }
+                    None => match self.value(start) {
+                        Type::List(t) => *t,
+                        Type::Unknown => Type::Unknown,
+                        Type::Map(..) => {
+                            self.err(Diag::new(start.span, "über eine Map läuft `for` mit `.keys()`").tip("z. B. `for k in m.keys()`"));
+                            Type::Unknown
+                        }
+                        other => {
+                            self.err(Diag::new(start.span, format!("`for` braucht einen Bereich `a..b` oder eine Liste, das hier ist {}", other.name())).tip("z. B. `for i in 0..10`"));
+                            Type::Unknown
+                        }
+                    },
+                };
+                self.loop_body(body, Some((var.as_str(), *span, ty)));
             }
+            Stmt::Match { value, arms } => self.match_stmt(value, arms),
             Stmt::Return { span, value } => match value {
                 Some(v) => {
                     let got = self.value(v);
-                    if self.ret == Type::Void {
+                    let ret = self.ret.clone();
+                    if matches!(ret, Type::Void) {
                         let mut d = Diag::new(v.span, "diese Funktion gibt nichts zurück");
                         if got != Type::Unknown {
                             d = d.tip(format!("schreibe `-> {}` hinter die Parameter, wenn sie einen Wert liefern soll", got.name()));
                         }
-                        self.diags.push(d);
+                        self.err(d);
                     } else {
-                        self.expect(self.ret, got, v.span, |w, g| format!("die Funktion gibt {w} zurück, das hier ist aber {g}"));
+                        self.coerce(v, &ret, |w, g| format!("die Funktion gibt {w} zurück, das hier ist aber {g}"));
                     }
                 }
                 None => {
-                    if !matches!(self.ret, Type::Void | Type::Unknown) {
-                        self.diags.push(Diag::new(*span, format!("hier fehlt der Rückgabewert ({})", self.ret.name())));
+                    if !matches!(self.ret, Type::Void | Type::Unknown) && self.ret != Type::Res(Box::new(Type::Void)) {
+                        self.err(Diag::new(*span, format!("hier fehlt der Rückgabewert ({})", self.ret.name())));
                     }
                 }
             },
+            Stmt::Break(span) | Stmt::Continue(span) => {
+                if self.loops == 0 {
+                    self.err(Diag::new(*span, "`break` und `continue` gibt es nur in Schleifen"));
+                }
+            }
             Stmt::Expr(e) => {
-                self.expr(e);
-                if !matches!(e.kind, ExprKind::Call { .. }) {
+                let ty = self.expr(e);
+                let call = match &e.kind {
+                    ExprKind::Invoke { .. } => true,
+                    ExprKind::Try(inner) => matches!(inner.kind, ExprKind::Invoke { .. }),
+                    _ => false,
+                };
+                if !call && ty != Type::Unknown {
                     let mut d = Diag::new(e.span, "dieser Wert wird nicht benutzt");
                     if matches!(e.kind, ExprKind::Binary(BinOp::Eq, ..)) {
                         d = d.tip("zum Zuweisen nutze `=` statt `==`");
                     }
-                    self.diags.push(d);
+                    self.err(d);
+                } else if matches!(ty, Type::Res(_)) {
+                    self.err(Diag::new(e.span, "hier kann ein Fehler herauskommen, der nicht beachtet wird").tip("`…?` gibt ihn weiter, `let _ = … else err` fängt ihn ab"));
                 }
+            }
+        }
+    }
+
+    fn loop_body(&mut self, body: &mut [Stmt], var: Option<(&str, Span, Type)>) {
+        self.scopes.push(HashMap::new());
+        if let Some((name, span, ty)) = var {
+            self.declare(name, span, ty, VarKind::Loop);
+        }
+        self.loops += 1;
+        self.block(body);
+        self.loops -= 1;
+        self.scopes.pop();
+    }
+
+    fn match_stmt(&mut self, value: &mut Expr, arms: &mut [Arm]) {
+        let ty = self.value(value);
+        let variants = match &ty {
+            Type::Enum(k) => self.variants.get(k).cloned(),
+            _ => None,
+        };
+        let mut covered = HashSet::new();
+        let mut wild = false;
+        for arm in arms.iter_mut() {
+            self.scopes.push(HashMap::new());
+            let span = arm.pat.span;
+            match (&mut arm.pat.kind, &ty) {
+                (PatKind::Wild, _) => wild = true,
+                (_, Type::Unknown) => {}
+                (PatKind::Variant { name, binds, index }, Type::Enum(key)) => {
+                    let vs = variants.as_ref().expect("Enum ist registriert");
+                    match vs.iter().position(|(n, _)| n == name) {
+                        Some(i) => {
+                            *index = i;
+                            covered.insert(i);
+                            let fields = &vs[i].1;
+                            if !binds.is_empty() && binds.len() != fields.len() {
+                                let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+                                self.err(Diag::new(span, format!("`{name}` hat {} Feld(er), hier stehen {} Namen", fields.len(), binds.len())).tip(format!("schreibe `{name}({})`", names.join(", "))));
+                            }
+                            for ((b, at), f) in binds.iter().zip(fields) {
+                                self.declare(b, *at, f.ty.clone(), VarKind::Let);
+                            }
+                        }
+                        None => {
+                            let names: Vec<&str> = vs.iter().map(|v| v.0.as_str()).collect();
+                            self.err(Diag::new(span, format!("`{key}` hat keinen Fall `{name}`")).tip(format!("die Fälle sind: {}", names.join(", "))));
+                        }
+                    }
+                }
+                (PatKind::Int(_), Type::Int) | (PatKind::Str(_), Type::Str) => {}
+                (PatKind::Bool(b), Type::Bool) => {
+                    covered.insert(*b as usize);
+                }
+                (_, other) => {
+                    self.err(Diag::new(span, format!("dieses Muster passt nicht zu {}", other.name())));
+                }
+            }
+            self.block(&mut arm.body);
+            self.scopes.pop();
+        }
+        if wild || ty == Type::Unknown {
+            return;
+        }
+        match (&ty, variants) {
+            (Type::Enum(_), Some(vs)) => {
+                let missing: Vec<&str> = vs.iter().enumerate().filter(|(i, _)| !covered.contains(i)).map(|(_, v)| v.0.as_str()).collect();
+                if !missing.is_empty() {
+                    self.err(Diag::new(value.span, format!("`match` deckt nicht alle Fälle ab, es fehlt: {}", missing.join(", "))).tip("ergänze die Fälle oder fange den Rest mit `_ => …` ab"));
+                }
+            }
+            (Type::Bool, _) if covered.len() == 2 => {}
+            (Type::Int | Type::Str | Type::Bool, _) => {
+                self.err(Diag::new(value.span, "`match` deckt nicht alle Werte ab").tip("fange den Rest mit `_ => …` ab"));
+            }
+            (other, _) => {
+                self.err(Diag::new(value.span, format!("`match` geht mit Enums, int, str und bool, nicht mit {}", other.name())).tip("für T? und T! nimm `if let`"));
             }
         }
     }
@@ -226,32 +760,360 @@ impl Checker {
         let got = self.value(e);
         if !matches!(got, Type::Bool | Type::Unknown) {
             let mut d = Diag::new(e.span, format!("die Bedingung muss bool sein, ist aber {}", got.name()));
-            if matches!(got, Type::Int | Type::F64) {
+            if got.is_num() {
                 d = d.tip("vergleiche die Zahl, z. B. mit `!= 0`");
+            } else if matches!(got, Type::Opt(_) | Type::Res(_)) {
+                d = d.tip("prüfe mit `if let x = …`, ob ein Wert da ist");
             }
-            self.diags.push(d);
+            self.err(d);
+        }
+    }
+
+    /// Darf man `e` ändern (Zuweisung oder `mut self`-Methode)? Meldet sonst einen Fehler.
+    fn check_mut(&mut self, e: &Expr, what: &str) {
+        match &e.kind {
+            ExprKind::Ident(name) => {
+                let Some(var) = self.lookup(name) else { return };
+                let tip = match var.kind {
+                    VarKind::Var | VarKind::SelfMut => return,
+                    VarKind::Param => format!("Parameter sind fest – kopiere den Wert in eine eigene Variable, z. B. `var wert = {name}`"),
+                    VarKind::Loop => "die Schleifenvariable setzt Volt selbst – nutze dafür eine eigene `var`".to_string(),
+                    VarKind::SelfVal => "schreibe `mut self`, damit die Methode ihre Felder ändern darf".to_string(),
+                    VarKind::Let => format!("nutze `var {name} = …`, wenn sich der Wert ändern soll"),
+                };
+                self.err(Diag::new(e.span, format!("`{name}` ist unveränderlich")).tip(tip));
+            }
+            ExprKind::Field(x, _) => self.check_mut(x, what),
+            // Listen und Maps sind Referenzen: ihr Inhalt lässt sich immer ändern.
+            ExprKind::Index(..) => {}
+            _ => {
+                if e.ty != Type::Unknown {
+                    self.err(Diag::new(e.span, format!("hier kann man nichts {what}")).tip("speichere den Wert zuerst in einer `var`"));
+                }
+            }
         }
     }
 
     /// Wie `expr`, aber der Ausdruck muss einen Wert liefern.
     fn value(&mut self, e: &mut Expr) -> Type {
         if self.expr(e) == Type::Void {
-            self.diags.push(Diag::new(e.span, "dieser Aufruf gibt keinen Wert zurück"));
+            self.err(Diag::new(e.span, "dieser Aufruf gibt keinen Wert zurück"));
             e.ty = Type::Unknown;
         }
-        e.ty
+        e.ty.clone()
+    }
+
+    /// `a`, `a.b`, `a.b.c` – wenn `a` keine Variable ist, ein Name aus Modulen und Typen.
+    fn path(&self, e: &Expr) -> Option<Vec<String>> {
+        match &e.kind {
+            ExprKind::Ident(n) if self.lookup(n).is_none() => Some(vec![n.clone()]),
+            ExprKind::Field(x, n) => {
+                let mut p = self.path(x)?;
+                p.push(n.clone());
+                Some(p)
+            }
+            _ => None,
+        }
+    }
+
+    fn resolve_path(&self, segs: &[String]) -> PathRes {
+        let mut res = if self.uses(&segs[0]) {
+            PathRes::Module
+        } else if let Some((key, kind)) = self.type_key(&segs[0]) {
+            PathRes::Type(key, kind)
+        } else if self.fns.contains_key(&self.qual(&segs[0])) {
+            PathRes::Fn(self.qual(&segs[0]))
+        } else {
+            return PathRes::Missing;
+        };
+        for (i, seg) in segs.iter().enumerate().skip(1) {
+            res = match res {
+                PathRes::Module => {
+                    let key = format!("{}.{seg}", segs[i - 1]);
+                    match self.types.get(&key) {
+                        Some(kind) => PathRes::Type(key, *kind),
+                        None if self.fns.contains_key(&key) => PathRes::Fn(key),
+                        None => return PathRes::Missing,
+                    }
+                }
+                PathRes::Type(key, kind) => {
+                    let variant = if kind == Kind::Enum { self.variants.get(&key).and_then(|vs| vs.iter().position(|v| v.0 == *seg)) } else { None };
+                    match variant {
+                        Some(v) => PathRes::Variant(key, v),
+                        None if self.fns.contains_key(&format!("{key}.{seg}")) => PathRes::Static(format!("{key}.{seg}")),
+                        None => return PathRes::Missing,
+                    }
+                }
+                _ => return PathRes::Missing,
+            };
+        }
+        res
+    }
+
+    fn field_type(&mut self, recv: &Type, name: &str, span: Span) -> Type {
+        match recv {
+            Type::Struct(k) => match self.structs.get(k).and_then(|fs| fs.iter().find(|f| f.name == name)) {
+                Some(f) => f.ty.clone(),
+                None => {
+                    let mut d = Diag::new(span, format!("`{k}` hat kein Feld `{name}`"));
+                    if self.fns.contains_key(&format!("{k}.{name}")) {
+                        d = d.tip(format!("`{name}` ist eine Methode – rufe sie mit `.{name}(…)` auf"));
+                    }
+                    self.err(d);
+                    Type::Unknown
+                }
+            },
+            Type::Unknown => Type::Unknown,
+            other => {
+                let mut d = Diag::new(span, format!("{} hat kein Feld `{name}`", other.name()));
+                if builtin_method(other, name).is_some() {
+                    d = d.tip(format!("`{name}` ist eine Methode – rufe sie mit `.{name}()` auf"));
+                }
+                self.err(d);
+                Type::Unknown
+            }
+        }
+    }
+
+    /// Positions- und benannte Argumente den Feldern zuordnen, fehlende mit Standardwerten füllen.
+    fn ctor_args(&mut self, owner: &str, fields: &[FieldInfo], args: Vec<Arg>, span: Span) -> Vec<Expr> {
+        let mut slots: Vec<Option<Expr>> = vec![None; fields.len()];
+        let mut pos = 0;
+        for mut a in args {
+            self.value(&mut a.value);
+            let i = match &a.name {
+                None if pos < fields.len() => {
+                    pos += 1;
+                    pos - 1
+                }
+                None => {
+                    self.err(Diag::new(a.value.span, format!("`{owner}` hat nur {} Feld(er)", fields.len())));
+                    continue;
+                }
+                Some((n, at)) => match fields.iter().position(|f| f.name == *n) {
+                    Some(i) if slots[i].is_none() => i,
+                    Some(_) => {
+                        self.err(Diag::new(*at, format!("`{n}` ist doppelt angegeben")));
+                        continue;
+                    }
+                    None => {
+                        self.err(Diag::new(*at, format!("`{owner}` hat kein Feld `{n}`")));
+                        continue;
+                    }
+                },
+            };
+            let fname = fields[i].name.clone();
+            self.coerce(&mut a.value, &fields[i].ty, |w, g| format!("`{owner}.{fname}` soll {w} sein, ist aber {g}"));
+            slots[i] = Some(a.value);
+        }
+        let mut missing = Vec::new();
+        let out = slots
+            .into_iter()
+            .zip(fields)
+            .map(|(slot, f)| {
+                slot.or_else(|| f.default.clone()).unwrap_or_else(|| {
+                    missing.push(f.name.as_str());
+                    Expr { kind: ExprKind::Int(0), span, ty: Type::Unknown }
+                })
+            })
+            .collect();
+        if !missing.is_empty() {
+            self.err(Diag::new(span, format!("`{owner}(…)` braucht noch: {}", missing.join(", "))).tip(format!("z. B. `{owner}({}: …)`", missing[0])));
+        }
+        out
+    }
+
+    /// Argumente eines normalen Aufrufs prüfen.
+    fn call_args(&mut self, name: &str, params: &[Type], args: Vec<Arg>, span: Span) -> Vec<Expr> {
+        let mut out = Vec::new();
+        for mut a in args {
+            if let Some((_, at)) = &a.name {
+                self.err(Diag::new(*at, "benannte Argumente gibt es nur beim Erzeugen von Structs und Enum-Fällen"));
+            }
+            self.value(&mut a.value);
+            out.push(a.value);
+        }
+        if params.len() != out.len() {
+            self.err(Diag::new(span, format!("`{name}` erwartet {} Argument(e), bekommen hat es {}", params.len(), out.len())));
+        }
+        for (i, (want, a)) in params.iter().zip(&mut out).enumerate() {
+            self.coerce(a, want, |w, g| format!("Argument {} von `{name}` soll {w} sein, ist aber {g}", i + 1));
+        }
+        out
+    }
+
+    fn builtin_call(&mut self, name: &'static str, args: Vec<Arg>, span: Span) -> (Vec<Expr>, Type) {
+        use Type::*;
+        let n = args.len();
+        let (params, ret): (Vec<Type>, Type) = match name {
+            "print" => {
+                let mut out = self.call_args(name, &vec![Unknown; n], args, span);
+                if n != 1 {
+                    self.err(Diag::new(span, format!("`print` gibt genau einen Wert aus, bekommen hat es {n}")).tip("mehrere Werte passen in einen String: `print(\"{a} {b}\")`"));
+                } else if !out[0].ty.is_prim() && out[0].ty != Unknown {
+                    let d = Diag::new(out[0].span, format!("`print` gibt int, f64, bool und str aus, das hier ist {}", out[0].ty.name()));
+                    self.err(d.tip("gib einzelne Felder aus, z. B. `print(\"{p.name}\")`"));
+                    out[0].ty = Unknown;
+                }
+                return (out, Void);
+            }
+            "input" if n == 0 => (vec![], Opt(Box::new(Str))),
+            "input" => (vec![Str], Opt(Box::new(Str))),
+            "error" => (vec![Str], Error),
+            "int" => (vec![F64], Int),
+            "float" => (vec![Int], F64),
+            "sqrt" => (vec![F64], F64),
+            "exit" => (vec![Int], Void),
+            _ /* abs */ => {
+                let out = self.call_args(name, &[Unknown], args, span);
+                let ty = out.first().map(|a| a.ty.clone()).unwrap_or(Unknown);
+                if !ty.is_num() && ty != Unknown {
+                    self.err(Diag::new(span, format!("`abs` braucht eine Zahl, das hier ist {}", ty.name())));
+                    return (out, Unknown);
+                }
+                return (out, ty);
+            }
+        };
+        (self.call_args(name, &params, args, span), ret)
+    }
+
+    fn call(&mut self, callee: Expr, args: Vec<Arg>, span: Span) -> (ExprKind, Type) {
+        // Methode auf einem Wert: `p.hit(5)`, `name.upper()`
+        if self.path(&callee).is_none() {
+            if let ExprKind::Field(mut recv, name) = callee.kind {
+                let recv_ty = self.value(&mut recv);
+                return match &recv_ty {
+                    Type::Struct(k) | Type::Enum(k) => {
+                        let key = format!("{k}.{name}");
+                        match self.fns.get(&key).cloned() {
+                            Some(Sig { this: Some(this), params, ret }) => {
+                                if this == SelfKind::Mut {
+                                    self.check_mut(&recv, "ändern");
+                                }
+                                let mut all = vec![*recv];
+                                all.extend(self.call_args(&name, &params, args, span));
+                                (ExprKind::Invoke { target: Target::Method { key, this }, args: all }, ret)
+                            }
+                            Some(_) => {
+                                self.err(Diag::new(span, format!("`{key}` gehört zum Typ, nicht zu einem Wert")).tip(format!("rufe sie mit `{key}(…)` auf")));
+                                (ExprKind::Int(0), Type::Unknown)
+                            }
+                            None => {
+                                let mut d = Diag::new(span, format!("`{k}` hat keine Methode `{name}`"));
+                                if self.structs.get(k).is_some_and(|fs| fs.iter().any(|f| f.name == name)) {
+                                    d = d.tip(format!("`{name}` ist ein Feld – lies es ohne Klammern: `.{name}`"));
+                                }
+                                self.err(d);
+                                (ExprKind::Int(0), Type::Unknown)
+                            }
+                        }
+                    }
+                    Type::Unknown => {
+                        self.call_args(&name, &[], Vec::new(), span);
+                        (ExprKind::Int(0), Type::Unknown)
+                    }
+                    other => match builtin_method(other, &name) {
+                        Some((id, params, ret)) => {
+                            let mut all = vec![*recv];
+                            all.extend(self.call_args(&name, &params, args, span));
+                            (ExprKind::Invoke { target: Target::BuiltinMethod(id), args: all }, ret)
+                        }
+                        None => {
+                            let mut d = Diag::new(span, format!("{} hat keine Methode `{name}`", other.name()));
+                            if !methods_of(other).is_empty() {
+                                d = d.tip(format!("es gibt: {}", methods_of(other)));
+                            }
+                            self.err(d);
+                            (ExprKind::Int(0), Type::Unknown)
+                        }
+                    },
+                };
+            }
+            // Aufruf einer Variablen oder eines Ausdrucks
+            let name = text(&callee);
+            let mut d = Diag::new(span, format!("die Funktion `{name}` gibt es nicht"));
+            if matches!(callee.kind, ExprKind::Ident(_)) {
+                d = d.tip(format!("`{name}` ist eine Variable, keine Funktion"));
+            }
+            self.err(d);
+            for mut a in args {
+                self.value(&mut a.value);
+            }
+            return (ExprKind::Int(0), Type::Unknown);
+        }
+        let segs = self.path(&callee).expect("oben geprüft");
+        let shown = segs.join(".");
+        let fail = |c: &mut Self, d: Diag, args: Vec<Arg>| {
+            c.err(d);
+            for mut a in args {
+                c.value(&mut a.value);
+            }
+            (ExprKind::Int(0), Type::Unknown)
+        };
+        match self.resolve_path(&segs) {
+            PathRes::Fn(key) | PathRes::Static(key) if self.fns[&key].this.is_none() => {
+                let sig = self.fns[&key].clone();
+                let args = self.call_args(segs.last().unwrap(), &sig.params, args, span);
+                (ExprKind::Invoke { target: Target::Fn(key), args }, sig.ret)
+            }
+            PathRes::Static(key) => {
+                let name = segs.last().unwrap();
+                fail(self, Diag::new(span, format!("`{key}` braucht einen Wert")).tip(format!("rufe sie auf einem Wert auf: `wert.{name}(…)`")), args)
+            }
+            PathRes::Type(key, Kind::Struct) => {
+                let fields = self.structs.get(&key).cloned().unwrap_or_default();
+                let args = self.ctor_args(&shown, &fields, args, span);
+                (ExprKind::Invoke { target: Target::New(key.clone()), args }, Type::Struct(key))
+            }
+            PathRes::Type(key, _) => {
+                let first = self.variants.get(&key).and_then(|vs| vs.first()).map(|v| v.0.clone()).unwrap_or_default();
+                fail(self, Diag::new(span, format!("`{shown}` ist ein Enum – wähle einen Fall")).tip(format!("z. B. `{shown}.{first}(…)`")), args)
+            }
+            PathRes::Variant(key, index) => {
+                let (vname, fields) = self.variants[&key][index].clone();
+                let args = self.ctor_args(&format!("{shown}"), &fields, args, span);
+                let _ = vname;
+                (ExprKind::Variant { key: key.clone(), index, args }, Type::Enum(key))
+            }
+            PathRes::Module => fail(self, Diag::new(span, format!("`{shown}` ist ein Modul")).tip(format!("rufe eine Funktion darin auf: `{shown}.name(…)`")), args),
+            PathRes::Fn(_) => unreachable!("freie Funktionen haben kein self"),
+            PathRes::Missing => match BUILTINS.iter().find(|b| segs.len() == 1 && **b == segs[0]) {
+                Some(b) => {
+                    let (args, ret) = self.builtin_call(b, args, span);
+                    (ExprKind::Invoke { target: Target::Builtin(b), args }, ret)
+                }
+                None => {
+                    let d = if segs.len() > 1 && !matches!(self.resolve_path(&segs[..1]), PathRes::Missing) {
+                        Diag::new(span, format!("`{shown}` gibt es nicht"))
+                    } else {
+                        Diag::new(span, format!("die Funktion `{shown}` gibt es nicht"))
+                    };
+                    fail(self, d, args)
+                }
+            },
+        }
     }
 
     fn expr(&mut self, e: &mut Expr) -> Type {
         let span = e.span;
+        let path = if matches!(e.kind, ExprKind::Field(..)) { self.path(e) } else { None };
         e.ty = match &mut e.kind {
             ExprKind::Int(_) => Type::Int,
             ExprKind::Float(_) => Type::F64,
             ExprKind::Bool(_) => Type::Bool,
+            ExprKind::None => Type::None,
             ExprKind::Str(segs) => {
                 for seg in segs {
                     if let StrSeg::Expr(inner) = seg {
-                        self.value(inner);
+                        let t = self.value(inner);
+                        if !t.is_prim() && t != Type::Unknown {
+                            let mut d = Diag::new(inner.span, format!("in `{{…}}` gehen int, f64, bool und str, das hier ist {}", t.name()));
+                            if matches!(t, Type::Opt(_) | Type::Res(_)) {
+                                d = d.tip("pack den Wert erst aus, z. B. mit `if let` oder `.or(…)`");
+                            }
+                            self.err(d);
+                            inner.ty = Type::Unknown;
+                        }
                     }
                 }
                 Type::Str
@@ -260,86 +1122,178 @@ impl Checker {
                 Some(var) => var.ty,
                 None => {
                     let mut d = Diag::new(span, format!("`{name}` gibt es hier nicht"));
-                    if *name == "print" || self.fns.contains_key(name.as_str()) {
-                        d = d.tip(format!("`{name}` ist eine Funktion – rufe sie mit `{name}(…)` auf"));
+                    match self.resolve_path(&[name.clone()]) {
+                        PathRes::Fn(_) => d = d.tip(format!("`{name}` ist eine Funktion – rufe sie mit `{name}(…)` auf")),
+                        PathRes::Type(..) => d = d.tip(format!("`{name}` ist ein Typ – einen Wert erzeugst du mit `{name}(…)`")),
+                        PathRes::Module => d = d.tip(format!("`{name}` ist ein Modul – nutze `{name}.name`")),
+                        _ if BUILTINS.contains(&name.as_str()) => d = d.tip(format!("`{name}` ist eine Funktion – rufe sie mit `{name}(…)` auf")),
+                        _ => {}
                     }
-                    self.diags.push(d);
+                    self.err(d);
                     Type::Unknown
                 }
             },
+            ExprKind::Field(..) if path.is_some() => {
+                let segs = path.expect("geprüft");
+                let shown = segs.join(".");
+                match self.resolve_path(&segs) {
+                    PathRes::Variant(key, index) if self.variants[&key][index].1.is_empty() => {
+                        e.kind = ExprKind::Variant { key: key.clone(), index, args: Vec::new() };
+                        Type::Enum(key)
+                    }
+                    PathRes::Variant(key, index) => {
+                        let names: Vec<String> = self.variants[&key][index].1.iter().map(|f| f.name.clone()).collect();
+                        self.err(Diag::new(span, format!("`{shown}` braucht Werte")).tip(format!("schreibe `{shown}({})`", names.join(", "))));
+                        Type::Unknown
+                    }
+                    PathRes::Missing if matches!(self.resolve_path(&segs[..1]), PathRes::Missing) => {
+                        self.err(Diag::new(span, format!("`{}` gibt es hier nicht", segs[0])));
+                        Type::Unknown
+                    }
+                    PathRes::Missing => {
+                        self.err(Diag::new(span, format!("`{shown}` gibt es nicht")));
+                        Type::Unknown
+                    }
+                    _ => {
+                        self.err(Diag::new(span, format!("`{shown}` ist kein Wert")).tip(format!("rufe es auf: `{shown}(…)`")));
+                        Type::Unknown
+                    }
+                }
+            }
+            ExprKind::Field(x, name) => {
+                let recv = self.value(x);
+                let name = name.clone();
+                self.field_type(&recv, &name, span)
+            }
+            ExprKind::Index(x, i) => {
+                let xt = self.value(x);
+                self.value(i);
+                match xt {
+                    Type::List(t) => {
+                        if !matches!(i.ty, Type::Int | Type::Unknown) {
+                            self.err(Diag::new(i.span, format!("der Index einer Liste ist int, das hier ist {}", i.ty.name())));
+                        }
+                        *t
+                    }
+                    Type::Map(k, v) => {
+                        self.coerce(i, &k, |w, g| format!("die Schlüssel dieser Map sind {w}, das hier ist {g}"));
+                        *v
+                    }
+                    Type::Unknown => Type::Unknown,
+                    other => {
+                        self.err(Diag::new(span, format!("{} lässt sich nicht mit `[…]` lesen", other.name())));
+                        Type::Unknown
+                    }
+                }
+            }
+            ExprKind::Try(x) => {
+                let t = self.value(x);
+                match (t, self.ret.clone()) {
+                    (Type::Opt(inner), Type::Opt(_)) | (Type::Res(inner), Type::Res(_)) => *inner,
+                    (Type::Unknown, _) | (_, Type::Unknown) => Type::Unknown,
+                    (Type::Opt(_), _) => {
+                        self.err(Diag::new(span, "`?` gibt `none` weiter – dafür muss die Funktion selbst `T?` zurückgeben").tip("oder pack den Wert mit `if let` / `let … else` aus"));
+                        Type::Unknown
+                    }
+                    (Type::Res(_), _) => {
+                        self.err(Diag::new(span, "`?` gibt den Fehler weiter – dafür muss die Funktion selbst `T!` zurückgeben").tip("oder fang ihn mit `let x = … else err` ab"));
+                        Type::Unknown
+                    }
+                    (other, _) => {
+                        self.err(Diag::new(span, format!("`?` geht nur bei T? und T!, das hier ist {}", other.name())));
+                        Type::Unknown
+                    }
+                }
+            }
+            ExprKind::List(items) => {
+                let mut ty = Type::Unknown;
+                for (i, item) in items.iter_mut().enumerate() {
+                    let got = self.value(item);
+                    if i == 0 {
+                        ty = got;
+                        if matches!(ty, Type::None | Type::Error) {
+                            self.err(Diag::new(item.span, "der Typ der Liste ist unklar").tip("schreibe `List[int?]()` und füge die Werte mit `.push(…)` hinzu"));
+                            ty = Type::Unknown;
+                        }
+                    } else {
+                        let first = ty.clone();
+                        self.coerce(item, &first, |w, g| format!("die Liste enthält {w}, das hier ist aber {g}"));
+                    }
+                }
+                Type::List(Box::new(ty))
+            }
+            ExprKind::NewColl(t) => {
+                let t = t.clone();
+                match self.resolve(&t) {
+                    ty @ (Type::List(_) | Type::Map(..) | Type::Unknown) => ty,
+                    other => {
+                        self.err(Diag::new(span, format!("{} erzeugt man nicht mit `()`", other.name())));
+                        Type::Unknown
+                    }
+                }
+            }
             ExprKind::Unary(op, operand) => {
                 let got = self.value(operand);
                 let (sym, want, ok) = match op {
-                    UnOp::Neg => ("-", "eine Zahl", matches!(got, Type::Int | Type::F64)),
+                    UnOp::Neg => ("-", "eine Zahl", got.is_num()),
                     UnOp::Not => ("not", "bool", got == Type::Bool),
                 };
                 if ok {
                     got
                 } else {
                     if got != Type::Unknown {
-                        self.diags.push(Diag::new(span, format!("`{sym}` braucht {want}, bekommt aber {}", got.name())));
+                        self.err(Diag::new(span, format!("`{sym}` braucht {want}, bekommt aber {}", got.name())));
                     }
                     Type::Unknown
                 }
             }
             ExprKind::Binary(op, l, r) => {
                 let (lt, rt) = (self.value(l), self.value(r));
-                self.binary(*op, lt, rt, span)
+                let op = *op;
+                self.binary(op, &lt, &rt, span)
             }
-            ExprKind::Call { name, args } => {
-                let got: Vec<(Type, Span)> = args.iter_mut().map(|a| (self.value(a), a.span)).collect();
-                if *name == "print" {
-                    if got.len() != 1 {
-                        self.diags.push(
-                            Diag::new(span, format!("`print` gibt genau einen Wert aus, bekommen hat es {}", got.len()))
-                                .tip("mehrere Werte passen in einen String: `print(\"{a} {b}\")`"),
-                        );
-                    }
-                    Type::Void
-                } else if let Some(sig) = self.fns.get(name.as_str()).cloned() {
-                    if sig.params.len() != got.len() {
-                        self.diags.push(Diag::new(span, format!("`{name}` erwartet {} Argument(e), bekommen hat es {}", sig.params.len(), got.len())));
-                    }
-                    for (i, (want, (got, at))) in sig.params.iter().zip(&got).enumerate() {
-                        self.expect(*want, *got, *at, |w, g| format!("Argument {} von `{name}` soll {w} sein, ist aber {g}", i + 1));
-                    }
-                    sig.ret
-                } else {
-                    let mut d = Diag::new(span, format!("die Funktion `{name}` gibt es nicht"));
-                    if self.lookup(name).is_some() {
-                        d = d.tip(format!("`{name}` ist eine Variable, keine Funktion"));
-                    }
-                    self.diags.push(d);
-                    Type::Unknown
-                }
+            ExprKind::Call { .. } => {
+                let ExprKind::Call { callee, args } = take(e) else { unreachable!() };
+                let (kind, ty) = self.call(*callee, args, span);
+                e.kind = kind;
+                ty
             }
+            // Schon aufgelöst (z. B. Standardwerte, die zweimal geprüft würden).
+            ExprKind::Invoke { .. } | ExprKind::Variant { .. } | ExprKind::Wrap(_) => e.ty.clone(),
         };
-        e.ty
+        e.ty.clone()
     }
 
-    fn binary(&mut self, op: BinOp, l: Type, r: Type, span: Span) -> Type {
+    fn binary(&mut self, op: BinOp, l: &Type, r: &Type, span: Span) -> Type {
         use {BinOp::*, Type::*};
         let arithmetic = matches!(op, Add | Sub | Mul | Div | Mod);
-        let num = |t| matches!(t, Int | F64);
+        let fieldless = |t: &Type| match t {
+            Enum(k) => self.variants.get(k).is_some_and(|vs| vs.iter().all(|v| v.1.is_empty())),
+            _ => false,
+        };
         let ty = match op {
-            _ if l == Unknown || r == Unknown => Some(if arithmetic { Unknown } else { Bool }),
-            Add | Sub | Mul | Div if num(l) && num(r) => Some(if l == F64 || r == F64 { F64 } else { Int }),
-            Mod if l == Int && r == Int => Some(Int),
-            Lt | Le | Gt | Ge if num(l) && num(r) => Some(Bool),
-            Eq | Ne if l == r || (num(l) && num(r)) => Some(Bool),
-            And | Or if l == Bool && r == Bool => Some(Bool),
-            _ => None,
+            _ if *l == Unknown || *r == Unknown => Some(if arithmetic { Unknown } else { Bool }),
+            Add | Sub | Mul | Div if l.is_num() && r.is_num() => Some(if *l == F64 || *r == F64 { F64 } else { Int }),
+            Mod if *l == Int && *r == Int => Some(Int),
+            Lt | Le | Gt | Ge if l.is_num() && r.is_num() => Some(Bool),
+            Eq | Ne if (l == r && (l.is_prim() || fieldless(l))) || (l.is_num() && r.is_num()) => Some(Bool),
+            And | Or if *l == Bool && *r == Bool => Some(Bool),
+            _ => Option::None,
         };
         ty.unwrap_or_else(|| {
             let mut d = Diag::new(span, format!("`{}` geht nicht mit {} und {}", op.sym(), l.name(), r.name()));
-            if op == Add && (l == Str || r == Str) {
+            if op == Add && (*l == Str || *r == Str) {
                 d = d.tip("Strings setzt man mit Einfügungen zusammen: `\"{a}{b}\"`");
-            } else if op == Mod && num(l) && num(r) {
-                d = d.tip("`%` gibt es bisher nur für int");
-            } else if matches!(op, And | Or) && (num(l) || num(r)) {
+            } else if op == Mod && l.is_num() && r.is_num() {
+                d = d.tip("`%` gibt es nur für int");
+            } else if matches!(op, And | Or) && (l.is_num() || r.is_num()) {
                 d = d.tip("`and` und `or` verknüpfen Bedingungen, z. B. `a > 0 and b > 0`");
+            } else if matches!(op, Eq | Ne) && (matches!(l, Opt(_)) || matches!(r, None)) {
+                d = d.tip("ob ein Wert da ist, prüfst du mit `if let x = …`");
+            } else if matches!(op, Eq | Ne) && l == r && matches!(l, Enum(_)) {
+                d = d.tip("Fälle mit Daten vergleichst du mit `match`");
             }
-            self.diags.push(d);
+            self.err(d);
             if arithmetic { Unknown } else { Bool }
         })
     }
@@ -390,7 +1344,7 @@ fn main()
             .body
             .iter()
             .filter_map(|s| match s {
-                Stmt::Let { ty, .. } => Some(*ty),
+                Stmt::Let { ty, .. } => Some(ty.clone()),
                 _ => None,
             })
             .collect();
@@ -471,5 +1425,114 @@ fn main()
     fn mehrere_fehler_ohne_folgefehler() {
         // Der unbekannte Name `y` darf keine weiteren Meldungen nach sich ziehen.
         assert_eq!(errors("let a = y + 1\nlet b = a * 2\nlet c: int = \"x\""), vec!["`y` gibt es hier nicht", "`c` soll int sein, der Wert ist aber str"]);
+    }
+
+    const TYPEN: &str = "\
+struct Player
+    name: str
+    hp: int = 100
+
+    fn hit(mut self, dmg: int)
+        self.hp -= dmg
+
+    fn alive(self) -> bool
+        return self.hp > 0
+
+enum Shape
+    Circle(radius: f64)
+    Rect(w: f64, h: f64)
+    Empty
+
+fn area(s: Shape) -> f64
+    match s
+        Circle(r) => 3.14 * r * r
+        Rect(w, h) => w * h
+        Empty => 0.0
+
+fn find(xs: List[int], x: int) -> int?
+    for i in 0..xs.len()
+        if xs[i] == x
+            return i
+    return none
+
+fn parse(s: str) -> int!
+    let n = s.to_int() else
+        return error(\"keine Zahl: {s}\")
+    return n * 2
+
+fn twice(s: str) -> int!
+    return parse(s)? + parse(s)?
+";
+
+    fn with_types(body: &str) -> Vec<String> {
+        let body: String = body.lines().map(|l| format!("    {l}\n")).collect();
+        run(&format!("{TYPEN}\nfn main()\n{body}")).1.into_iter().map(|d| d.msg).collect()
+    }
+
+    #[test]
+    fn phase2_gueltig() {
+        let ok = "\
+var p = Player(\"Ana\")
+p.hit(5)
+let q = Player(name: \"Bo\", hp: 3)
+print(p.alive())
+print(area(Shape.Circle(2.0)) + area(Shape.Empty))
+let xs = [1, 2, 3]
+xs.push(4)
+if let i = find(xs, 3)
+    print(i)
+let m = Map[str, int]()
+m[\"a\"] = 1
+m[\"a\"] += 1
+print(m.get(\"a\").or(0))
+for k in m.keys()
+    print(k.upper())
+let words = \"a b\".split(\" \")
+print(words.join(\",\"))
+let n = twice(\"4\") else err
+    print(err)
+    return
+print(n)
+while true
+    break
+match n
+    1 => print(\"eins\")
+    _ => print(\"viel\")
+";
+        assert_eq!(with_types(ok), Vec::<String>::new());
+    }
+
+    #[test]
+    fn phase2_fehler() {
+        assert_eq!(with_types("let p = Player(\"A\")\np.hit(1)"), vec!["`p` ist unveränderlich"]);
+        assert_eq!(with_types("let p = Player()"), vec!["`Player(…)` braucht noch: name"]);
+        assert_eq!(with_types("let p = Player(\"A\", hpp: 1)"), vec!["`Player` hat kein Feld `hpp`"]);
+        assert_eq!(with_types("let p = Player(1)"), vec!["`Player.name` soll str sein, ist aber int"]);
+        assert_eq!(with_types("let s = Shape.Circle"), vec!["`Shape.Circle` braucht Werte"]);
+        assert_eq!(with_types("let s = Shape.Kreis(1.0)"), vec!["`Shape.Kreis` gibt es nicht"]);
+        assert_eq!(with_types("let x: int = find([1], 1)"), vec!["`x` soll int sein, der Wert ist aber int?"]);
+        assert_eq!(with_types("let x = none"), vec!["bei `none` ist unklar, welcher Typ gemeint ist"]);
+        assert_eq!(with_types("let x = parse(\"1\")?"), vec!["`?` gibt den Fehler weiter – dafür muss die Funktion selbst `T!` zurückgeben"]);
+        assert_eq!(with_types("parse(\"1\")"), vec!["hier kann ein Fehler herauskommen, der nicht beachtet wird"]);
+        assert_eq!(with_types("let n = parse(\"1\") else\n    print(1)"), vec!["der `else`-Block muss hier aufhören"]);
+        assert_eq!(with_types("let s = Shape.Empty\nmatch s\n    Empty => print(1)"), vec!["`match` deckt nicht alle Fälle ab, es fehlt: Circle, Rect"]);
+        assert_eq!(with_types("break"), vec!["`break` und `continue` gibt es nur in Schleifen"]);
+        assert_eq!(with_types("let xs = [1]\nxs.push(\"a\")"), vec!["Argument 1 von `push` soll int sein, ist aber str"]);
+        assert_eq!(with_types("let xs = [1]\nprint(xs.size())"), vec!["List[int] hat keine Methode `size`"]);
+        assert_eq!(with_types("print(Player(\"a\"))"), vec!["`print` gibt int, f64, bool und str aus, das hier ist Player"]);
+        assert_eq!(with_types("for i in 5\n    print(i)"), vec!["`for` braucht einen Bereich `a..b` oder eine Liste, das hier ist int"]);
+        let msgs = |src: &str| -> Vec<String> { run(src).1.into_iter().map(|d| d.msg).collect() };
+        assert_eq!(msgs("struct A\n    a: A\nfn main()\n    print(1)\n"), vec!["`A` enthält sich selbst"]);
+        assert_eq!(msgs("use nix\nfn main()\n    print(1)\n"), vec!["das Modul `nix` gibt es nicht"]);
+    }
+
+    #[test]
+    fn module() {
+        let lib = volt_parser::parse(volt_lexer::lex("struct P\n    x: int\nfn neu(x: int) -> P\n    return P(x)\n").unwrap()).0;
+        let main = volt_parser::parse(volt_lexer::lex("use geo\nfn main()\n    let p: geo.P = geo.neu(1)\n    print(p.x)\n    let q = geo.P(2)\n    print(q.x)\n").unwrap()).0;
+        let mut units = vec![Unit { name: String::new(), module: main }, Unit { name: "geo".into(), module: lib }];
+        let diags = check_program(&mut units);
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(units[1].module.fns[0].key, "geo.neu");
     }
 }

@@ -1,6 +1,7 @@
 // Volt-Runtime (Phase 1): Ausgabe, String-Bau und sichere Division.
 // Der Compiler setzt diese Datei vor jedes erzeugte C-Programm.
 #include <inttypes.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -80,4 +81,270 @@ static int64_t volt_div(int64_t a, int64_t b, int line) {
 static int64_t volt_mod(int64_t a, int64_t b, int line) {
     if (b == 0) volt_panic("Division durch null", line);
     return b == -1 ? 0 : a % b;
+}
+
+// ---- Phase 2: Listen, Maps, String-Funktionen, Eingabe ----
+// shortcut: Listen, Maps und neue Strings werden nie freigegeben, das kommt in Phase 3.
+
+static void* volt_realloc(void* p, size_t n) {
+    p = realloc(p, n ? n : 1);
+    if (!p) volt_panic("kein Speicher mehr frei", 0);
+    return p;
+}
+
+static char* volt_str_alloc(size_t n) {  // n Bytes plus Endnull
+    char* s = volt_realloc(NULL, n + 1);
+    s[n] = 0;
+    return s;
+}
+
+// Liste: Elemente liegen am Stück, die Elementgröße gibt der Aufrufer mit.
+typedef struct { int64_t len, cap; char* data; } volt_list;
+
+static volt_list* volt_list_new(void) {
+    volt_list* l = volt_realloc(NULL, sizeof *l);
+    l->len = l->cap = 0;
+    l->data = NULL;
+    return l;
+}
+
+static void* volt_list_push(volt_list* l, size_t size) {
+    if (l->len == l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 4;
+        l->data = volt_realloc(l->data, (size_t)l->cap * size);
+    }
+    return l->data + (size_t)l->len++ * size;
+}
+
+static void* volt_at(volt_list* l, int64_t i, size_t size, int line) {
+    if (i < 0 || i >= l->len) volt_panic("Index außerhalb der Liste", line);
+    return l->data + (size_t)i * size;
+}
+
+static void volt_list_remove(volt_list* l, int64_t i, size_t size, int line, void* out) {
+    char* p = volt_at(l, i, size, line);
+    memcpy(out, p, size);
+    memmove(p, p + size, (size_t)(l->len - i - 1) * size);
+    l->len--;
+}
+
+static void volt_list_insert(volt_list* l, int64_t i, size_t size, int line, const void* value) {
+    if (i < 0 || i > l->len) volt_panic("Index außerhalb der Liste", line);
+    volt_list_push(l, size);
+    char* p = l->data + (size_t)i * size;
+    memmove(p + size, p, (size_t)(l->len - 1 - i) * size);
+    memcpy(p, value, size);
+}
+
+static volt_str volt_list_join(volt_list* l, volt_str sep) {
+    volt_str* it = (volt_str*)l->data;
+    size_t n = 0, ns = strlen(sep);
+    for (int64_t i = 0; i < l->len; i++) n += strlen(it[i]) + (i ? ns : 0);
+    char* out = volt_str_alloc(n);
+    char* w = out;
+    for (int64_t i = 0; i < l->len; i++) {
+        if (i) { memcpy(w, sep, ns); w += ns; }
+        size_t k = strlen(it[i]);
+        memcpy(w, it[i], k);
+        w += k;
+    }
+    return out;
+}
+
+static volt_str volt_str_sub(const char* s, size_t n) {
+    char* out = volt_str_alloc(n);
+    memcpy(out, s, n);
+    return out;
+}
+
+// Wie Python str.split(sep): "a,,b" ergibt drei Teile, auch leere.
+static volt_list* volt_str_split(volt_str s, volt_str sep) {
+    size_t ns = strlen(sep);
+    if (!ns) volt_panic("split braucht einen Trenner", 0);
+    volt_list* l = volt_list_new();
+    for (const char* hit; (hit = strstr(s, sep)); s = hit + ns)
+        *(volt_str*)volt_list_push(l, sizeof(volt_str)) = volt_str_sub(s, (size_t)(hit - s));
+    *(volt_str*)volt_list_push(l, sizeof(volt_str)) = volt_str_sub(s, strlen(s));
+    return l;
+}
+
+// Map: Einträge in Einfügereihenfolge (keys/vals), dazu eine Hash-Tabelle mit offener Adressierung.
+// Bei str_keys ist der Schlüssel ein volt_str (als Zahl gespeichert), sonst ein int64.
+typedef struct volt_map {
+    bool str_keys;
+    size_t vsize;
+    int64_t len, cap, icap;  // icap: Größe der Indextabelle, Zweierpotenz
+    uint64_t* keys;
+    char* vals;
+    int64_t* idx;  // Eintragsnummer oder -1 = leer
+} volt_map;
+
+static uint64_t volt_map_hash(volt_map* m, uint64_t key) {
+    if (m->str_keys) {  // FNV-1a
+        uint64_t h = 14695981039346656037ULL;
+        for (const unsigned char* p = (const unsigned char*)(uintptr_t)key; *p; p++) h = (h ^ *p) * 1099511628211ULL;
+        return h;
+    }
+    key *= 0x9E3779B97F4A7C15ULL;
+    return key ^ (key >> 32);
+}
+
+static bool volt_map_eq(volt_map* m, uint64_t a, uint64_t b) {
+    return m->str_keys ? strcmp((volt_str)(uintptr_t)a, (volt_str)(uintptr_t)b) == 0 : a == b;
+}
+
+// Position in der Indextabelle: dort steht der Schlüssel oder -1 (freier Platz).
+static int64_t volt_map_probe(volt_map* m, uint64_t key) {
+    int64_t mask = m->icap - 1, p = (int64_t)(volt_map_hash(m, key) & (uint64_t)mask);
+    while (m->idx[p] >= 0 && !volt_map_eq(m, m->keys[m->idx[p]], key)) p = (p + 1) & mask;
+    return p;
+}
+
+static void volt_map_reindex(volt_map* m, int64_t icap) {
+    m->icap = icap;
+    m->idx = volt_realloc(m->idx, (size_t)icap * sizeof(int64_t));
+    memset(m->idx, 0xff, (size_t)icap * sizeof(int64_t));  // alles -1
+    for (int64_t i = 0; i < m->len; i++) m->idx[volt_map_probe(m, m->keys[i])] = i;
+}
+
+static volt_map* volt_map_new(bool str_keys, size_t vsize) {
+    volt_map* m = volt_realloc(NULL, sizeof *m);
+    memset(m, 0, sizeof *m);
+    m->str_keys = str_keys;
+    m->vsize = vsize;
+    volt_map_reindex(m, 8);
+    return m;
+}
+
+static int64_t volt_map_len(volt_map* m) { return m->len; }
+
+static void* volt_map_find(volt_map* m, uint64_t key) {
+    int64_t i = m->idx[volt_map_probe(m, key)];
+    return i < 0 ? NULL : m->vals + (size_t)i * m->vsize;
+}
+
+static void* volt_map_slot(volt_map* m, uint64_t key) {
+    void* v = volt_map_find(m, key);
+    if (v) return v;
+    if ((m->len + 1) * 3 > m->icap * 2) volt_map_reindex(m, m->icap * 2);  // höchstens 2/3 voll
+    if (m->len == m->cap) {
+        m->cap = m->cap ? m->cap * 2 : 4;
+        m->keys = volt_realloc(m->keys, (size_t)m->cap * sizeof(uint64_t));
+        m->vals = volt_realloc(m->vals, (size_t)m->cap * m->vsize);
+    }
+    m->idx[volt_map_probe(m, key)] = m->len;
+    m->keys[m->len] = key;
+    v = m->vals + (size_t)m->len++ * m->vsize;
+    memset(v, 0, m->vsize);
+    return v;
+}
+
+static void* volt_map_at(volt_map* m, uint64_t key, int line) {
+    void* v = volt_map_find(m, key);
+    if (!v) volt_panic("Schlüssel fehlt in der Map", line);
+    return v;
+}
+
+// shortcut: Entfernen baut den ganzen Index neu auf (O(n)), bei Bedarf auf Tombstones umstellen.
+static void volt_map_remove(volt_map* m, uint64_t key) {
+    int64_t i = m->idx[volt_map_probe(m, key)];
+    if (i < 0) return;
+    m->len--;  // letzten Eintrag in die Lücke ziehen
+    m->keys[i] = m->keys[m->len];
+    memmove(m->vals + (size_t)i * m->vsize, m->vals + (size_t)m->len * m->vsize, m->vsize);
+    volt_map_reindex(m, m->icap);
+}
+
+static volt_list* volt_map_keys(volt_map* m) {
+    volt_list* l = volt_list_new();
+    for (int64_t i = 0; i < m->len; i++) *(uint64_t*)volt_list_push(l, sizeof(uint64_t)) = m->keys[i];
+    return l;
+}
+
+// String-Funktionen geben neue Strings zurück; upper/lower ändern nur ASCII-Buchstaben.
+static volt_str volt_str_upper(volt_str s) {
+    char* out = (char*)volt_str_sub(s, strlen(s));
+    for (char* p = out; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+    return out;
+}
+
+static volt_str volt_str_lower(volt_str s) {
+    char* out = (char*)volt_str_sub(s, strlen(s));
+    for (char* p = out; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;
+    return out;
+}
+
+static bool volt_is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+
+static volt_str volt_str_trim(volt_str s) {
+    size_t n = strlen(s);
+    while (n && volt_is_space(s[n - 1])) n--;
+    while (n && volt_is_space(*s)) s++, n--;
+    return volt_str_sub(s, n);
+}
+
+static bool volt_str_starts(volt_str s, volt_str p) { return strncmp(s, p, strlen(p)) == 0; }
+
+static bool volt_str_ends(volt_str s, volt_str p) {
+    size_t n = strlen(s), k = strlen(p);
+    return k <= n && memcmp(s + n - k, p, k) == 0;
+}
+
+static volt_str volt_str_replace(volt_str s, volt_str from, volt_str to) {
+    size_t nf = strlen(from), nt = strlen(to), n = strlen(s), hits = 0;
+    if (!nf) return s;
+    for (const char* p = s; (p = strstr(p, from)); p += nf) hits++;
+    char* out = volt_str_alloc(n - hits * nf + hits * nt);
+    char* w = out;
+    for (const char* hit; (hit = strstr(s, from)); s = hit + nf) {
+        memcpy(w, s, (size_t)(hit - s));
+        w += hit - s;
+        memcpy(w, to, nt);
+        w += nt;
+    }
+    strcpy(w, s);
+    return out;
+}
+
+static bool volt_str_to_int(volt_str s, int64_t* out) {
+    const char* p = volt_str_trim(s);
+    bool neg = *p == '-';
+    if (*p == '-' || *p == '+') p++;
+    if (!*p) return false;
+    uint64_t v = 0, max = neg ? (uint64_t)INT64_MAX + 1 : (uint64_t)INT64_MAX;
+    for (; *p; p++) {
+        if (*p < '0' || *p > '9') return false;
+        unsigned d = (unsigned)(*p - '0');
+        if (v > (max - d) / 10) return false;  // Überlauf
+        v = v * 10 + d;
+    }
+    *out = neg ? (int64_t)(0 - v) : (int64_t)v;
+    return true;
+}
+
+static bool volt_str_to_f64(volt_str s, double* out) {
+    const char* p = volt_str_trim(s);
+    char* end;
+    double v = strtod(p, &end);
+    if (!*p || *end) return false;
+    *out = v;
+    return true;
+}
+
+// Liest eine Zeile beliebiger Länge; false bei Dateiende ohne gelesene Zeichen.
+static bool volt_input(volt_str prompt, volt_str* out) {
+    fputs(prompt, stdout);
+    fflush(stdout);
+    size_t len = 0, cap = 64;
+    char* buf = volt_realloc(NULL, cap);
+    int c;
+    while ((c = getchar()) != EOF && c != '\n') {
+        if (len + 1 >= cap) buf = volt_realloc(buf, cap *= 2);
+        buf[len++] = (char)c;
+    }
+    if (c == EOF && !len) return false;
+    while (len && buf[len - 1] == '\r') len--;
+    buf[len] = 0;
+    *out = buf;
+    return true;
 }

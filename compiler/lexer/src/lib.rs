@@ -57,6 +57,14 @@ pub enum Tok {
     For,
     In,
     Return,
+    Struct,
+    Enum,
+    Match,
+    None,
+    Use,
+    Mut,
+    Break,
+    Continue,
     True,
     False,
     And,
@@ -80,6 +88,12 @@ pub enum Tok {
     Slash,
     Percent,
     DotDot,
+    Dot,
+    LBracket,
+    RBracket,
+    FatArrow,
+    Question,
+    Bang,
     PlusEq,
     MinusEq,
     StarEq,
@@ -115,6 +129,14 @@ static FIXED: &[(&str, Tok)] = &[
     ("for", Tok::For),
     ("in", Tok::In),
     ("return", Tok::Return),
+    ("struct", Tok::Struct),
+    ("enum", Tok::Enum),
+    ("match", Tok::Match),
+    ("none", Tok::None),
+    ("use", Tok::Use),
+    ("mut", Tok::Mut),
+    ("break", Tok::Break),
+    ("continue", Tok::Continue),
     ("true", Tok::True),
     ("false", Tok::False),
     ("and", Tok::And),
@@ -138,6 +160,12 @@ static FIXED: &[(&str, Tok)] = &[
     ("/", Tok::Slash),
     ("%", Tok::Percent),
     ("..", Tok::DotDot),
+    (".", Tok::Dot),
+    ("[", Tok::LBracket),
+    ("]", Tok::RBracket),
+    ("=>", Tok::FatArrow),
+    ("?", Tok::Question),
+    ("!", Tok::Bang),
     ("+=", Tok::PlusEq),
     ("-=", Tok::MinusEq),
     ("*=", Tok::StarEq),
@@ -289,6 +317,15 @@ impl Lexer {
                 self.parens = self.parens.saturating_sub(1);
                 Tok::RParen
             }
+            '[' => {
+                self.parens += 1;
+                Tok::LBracket
+            }
+            ']' => {
+                self.parens = self.parens.saturating_sub(1);
+                Tok::RBracket
+            }
+            '?' => Tok::Question,
             ',' => Tok::Comma,
             ':' => Tok::Colon,
             '+' if self.eat('=') => Tok::PlusEq,
@@ -303,13 +340,17 @@ impl Lexer {
             '%' if self.eat('=') => Tok::PercentEq,
             '%' => Tok::Percent,
             '=' if self.eat('=') => Tok::Eq,
+            '=' if self.eat('>') => Tok::FatArrow,
             '=' => Tok::Assign,
             '<' if self.eat('=') => Tok::Le,
             '<' => Tok::Lt,
             '>' if self.eat('=') => Tok::Ge,
             '>' => Tok::Gt,
             '!' if self.eat('=') => Tok::Ne,
+            // Allein steht `!` nur hinter einem Typ (`int!`); als „nicht“ meldet es der Parser.
+            '!' => Tok::Bang,
             '.' if self.eat('.') => Tok::DotDot,
+            '.' => Tok::Dot,
             '"' => self.string(first)?,
             '0'..='9' => self.number(start, first)?,
             'a'..='z' | 'A'..='Z' | '_' => {
@@ -325,7 +366,6 @@ impl Lexer {
             other => {
                 let diag = Diag::new(first, format!("unerwartetes Zeichen `{other}`"));
                 return Err(match other {
-                    '!' => diag.tip("„nicht“ schreibt man in Volt `not`"),
                     '&' | '|' => diag.tip("nutze `and` und `or`"),
                     ';' => diag.tip("Volt braucht kein Semikolon – eine Anweisung pro Zeile"),
                     '{' | '}' => diag.tip("geschweifte Klammern gibt es nur in Strings: `\"Wert: {x}\"`"),
@@ -483,6 +523,8 @@ mod tests {
     #[test]
     fn operatoren() {
         assert_eq!(show("a += 1 -> == != <= >= < > = %= .."), "a += 1 -> == != <= >= < > = %= .. NL EOF");
+        assert_eq!(show("p.x[0] => int? str! none"), "p . x [ 0 ] => int ? str ! none NL EOF");
+        assert_eq!(show("[1,\n  2]"), "[ 1 , 2 ] NL EOF");
     }
 
     #[test]
@@ -529,7 +571,6 @@ mod tests {
         assert!(error(r#""{a""#).msg.contains("schließende"));
         assert!(error(r#""\q""#).msg.contains("Escape"));
         assert!(error("99999999999999999999").msg.contains("zu groß"));
-        assert!(error("a ! b").tip.unwrap().contains("not"));
         assert!(error("a; b").tip.unwrap().contains("Semikolon"));
     }
 
