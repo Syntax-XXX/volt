@@ -1,0 +1,9 @@
+[package]
+name = "volt_types"
+description = "Volt: Typprüfung und Typinferenz auf dem AST"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+volt_lexer = { path = "../lexer" }
+volt_parser = { path = "../parser" }
