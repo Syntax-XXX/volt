@@ -9,13 +9,32 @@ type R<T> = Result<T, Diag>;
 
 /// Erwartet die Token-Liste des Lexers (endet mit `Eof`).
 pub fn parse(tokens: Vec<Token>) -> (Module, Vec<Diag>) {
+    parse_mode(tokens, false)
+}
+
+/// Volt Script (`.vts`): Anweisungen dürfen auf oberster Ebene stehen und laufen von oben nach unten –
+/// der Parser packt sie in ein unsichtbares `fn main()`.
+pub fn parse_script(tokens: Vec<Token>) -> (Module, Vec<Diag>) {
+    parse_mode(tokens, true)
+}
+
+fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
     let mut p = Parser { toks: tokens, i: 0, diags: Vec::new() };
     let mut fns = Vec::new();
+    let mut top = Vec::new();
     while !p.at(&Tok::Eof) {
         let before = p.i;
         if p.at(&Tok::Fn) {
             match p.fn_decl() {
                 Ok(f) => fns.push(f),
+                Err(d) => {
+                    p.diags.push(d);
+                    p.sync();
+                }
+            }
+        } else if script && !p.at(&Tok::Dedent) && !p.at(&Tok::Indent) {
+            match p.stmt() {
+                Ok(s) => top.push(s),
                 Err(d) => {
                     p.diags.push(d);
                     p.sync();
@@ -35,6 +54,12 @@ pub fn parse(tokens: Vec<Token>) -> (Module, Vec<Diag>) {
         if p.i == before {
             p.i += 1;
         }
+    }
+    if script {
+        if let Some(f) = fns.iter().find(|f| f.name == "main") {
+            p.diags.push(Diag::new(f.span, "ein Skript braucht kein `fn main()`").tip("schreibe den Code direkt auf die oberste Ebene"));
+        }
+        fns.push(FnDecl { name: "main".into(), span: Span { line: 1, col: 1, len: 1 }, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body: top });
     }
     (Module { fns }, p.diags)
 }
@@ -500,5 +525,14 @@ fn main()
         let (m, _) = parse_src("fn main()\n    x = a + bb\n");
         let Stmt::Assign { value, .. } = &m.fns[0].body[0] else { panic!() };
         assert_eq!(value.span, Span { line: 2, col: 9, len: 6 });
+    }
+
+    #[test]
+    fn skript_ohne_main() {
+        let (m, diags) = parse_script(volt_lexer::lex("let x = 2\nfn sq(n: int) -> int\n    return n * n\nprint(sq(x))\n").unwrap());
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(m.fns.iter().map(|f| (f.name.as_str(), f.body.len())).collect::<Vec<_>>(), [("sq", 1), ("main", 2)]);
+        let (_, diags) = parse_script(volt_lexer::lex("fn main()\n    print(1)\n").unwrap());
+        assert!(diags[0].msg.contains("kein `fn main()`"));
     }
 }

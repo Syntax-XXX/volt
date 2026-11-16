@@ -1,0 +1,11 @@
+[package]
+name = "volt"
+description = "Volt: eine Binary für alles (Phase 1: run, build, parse)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+volt_lexer = { path = "../compiler/lexer" }
+volt_parser = { path = "../compiler/parser" }
+volt_types = { path = "../compiler/types" }
+volt_codegen_c = { path = "../compiler/codegen_c" }

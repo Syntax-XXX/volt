@@ -1,0 +1,4 @@
+# Das kleinste Volt-Programm.
+fn main()
+    let name = "Volt"
+    print("Hallo, {name}! ⚡")

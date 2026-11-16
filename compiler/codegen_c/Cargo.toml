@@ -1,0 +1,12 @@
+[package]
+name = "volt_codegen_c"
+description = "Volt: C-Backend – geprüfter AST → C-Programm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+volt_parser = { path = "../parser" }
+
+[dev-dependencies]
+volt_lexer = { path = "../lexer" }
+volt_types = { path = "../types" }

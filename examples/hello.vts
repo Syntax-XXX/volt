@@ -1,0 +1,12 @@
+#!/usr/bin/env volt
+# Volt Script: kein main, läuft von oben nach unten.
+let name = "Volt Script"
+print("Hallo aus {name}!")
+
+fn quadrat(n: int) -> int
+    return n * n
+
+var summe = 0
+for i in 1..101
+    summe += quadrat(i)
+print("Summe der Quadrate 1..100 = {summe}")

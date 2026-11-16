@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["compiler/lexer", "compiler/parser", "compiler/types"]
+members = ["compiler/lexer", "compiler/parser", "compiler/types", "compiler/codegen_c", "cli"]
 
 [workspace.package]
 version = "0.1.0"
