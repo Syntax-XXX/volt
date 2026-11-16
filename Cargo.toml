@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["compiler/lexer"]
+members = ["compiler/lexer", "compiler/parser"]
 
 [workspace.package]
 version = "0.1.0"

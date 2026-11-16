@@ -1,0 +1,8 @@
+[package]
+name = "volt_parser"
+description = "Volt: Tokens → Syntaxbaum (AST)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+volt_lexer = { path = "../lexer" }
