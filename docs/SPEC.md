@@ -49,6 +49,8 @@ if let v = optional … else …          # nur wenn ein Wert da ist
 let v = f() else err                  # sonst: Block, der return/break/continue macht; err = Fehlertext bei T!
 while cond … / for i in 0..n … / for x in liste …
 break / continue / return [wert]
+defer aufruf(…)                       # läuft beim Verlassen des Blocks – auch bei return, break, continue und `?`;
+                                      # mehrere: zuletzt angemeldet zuerst; Werte werden erst dann ausgewertet
 match wert
     Circle(r) => print(r)              # Enum-Fall mit Bindung
     3 => …   "ja" => …   true => …     # Literale

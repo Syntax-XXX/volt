@@ -18,7 +18,7 @@ pub fn emit(m: &Module) -> String {
 
 /// Hauptprogramm (`mods[0]`, enthält `main`) samt Modulen. Erwartet einen fehlerfrei geprüften AST.
 pub fn emit_program(mods: &[&Module]) -> String {
-    let mut g = Gen { types: String::new(), protos: String::new(), body: String::new(), done: HashSet::new(), structs: HashMap::new(), enums: HashMap::new(), tmp: 0, mut_self: false, ret: Type::Void };
+    let mut g = Gen { types: String::new(), protos: String::new(), body: String::new(), done: HashSet::new(), structs: HashMap::new(), enums: HashMap::new(), tmp: 0, mut_self: false, ret: Type::Void, defers: Vec::new(), loops: Vec::new() };
     for m in mods {
         for s in &m.structs {
             g.structs.insert(s.key.clone(), s);
@@ -139,6 +139,10 @@ struct Gen<'a> {
     /// Die aktuelle Methode hat `mut self` (dann ist `self` ein Zeiger).
     mut_self: bool,
     ret: Type,
+    /// Offene `defer`-Aufrufe je Block (C-Code), innerster Block zuletzt.
+    defers: Vec<Vec<String>>,
+    /// Länge von `defers` vor dem Rumpf der jeweils innersten Schleife.
+    loops: Vec<usize>,
 }
 
 impl<'a> Gen<'a> {
@@ -244,6 +248,8 @@ impl<'a> Gen<'a> {
     fn function(&mut self, f: &FnDecl) {
         self.mut_self = f.this == Some(SelfKind::Mut);
         self.ret = f.ret.clone();
+        self.defers.clear();
+        self.loops.clear();
         let sig = self.signature(f);
         self.body += &format!("\n{sig} {{\n");
         self.block(&f.body, 1);
@@ -261,9 +267,26 @@ impl<'a> Gen<'a> {
     }
 
     fn block(&mut self, stmts: &[Stmt], depth: usize) {
+        self.defers.push(Vec::new());
         for s in stmts {
             self.stmt(s, depth);
         }
+        // normales Blockende: eigene defers, zuletzt angemeldet zuerst
+        for code in self.defers.last().cloned().unwrap_or_default().iter().rev() {
+            self.line(depth, &format!("{code};"));
+        }
+        self.defers.pop();
+    }
+
+    /// C-Code aller offenen defers ab Block `from` (innerster zuerst) – für return, break, continue und `?`.
+    fn unwind(&self, from: usize) -> String {
+        self.defers[from.min(self.defers.len())..].iter().rev().flat_map(|b| b.iter().rev()).map(|c| format!("{c}; ")).collect()
+    }
+
+    fn loop_body(&mut self, body: &[Stmt], depth: usize) {
+        self.loops.push(self.defers.len());
+        self.block(body, depth);
+        self.loops.pop();
     }
 
     fn stmt(&mut self, s: &Stmt, d: usize) {
@@ -327,7 +350,7 @@ impl<'a> Gen<'a> {
             Stmt::While { cond, body } => {
                 let cond = self.expr(cond);
                 self.line(d, &format!("while ({cond}) {{"));
-                self.block(body, d + 1);
+                self.loop_body(body, d + 1);
                 self.line(d, "}");
             }
             Stmt::For { var, start, end: Some(end), body, .. } => {
@@ -335,7 +358,7 @@ impl<'a> Gen<'a> {
                 let (start, end) = (self.expr(start), self.expr(end));
                 let stop = self.fresh("end");
                 self.line(d, &format!("for (int64_t v_{var} = {start}, {stop} = {end}; v_{var} < {stop}; v_{var}++) {{"));
-                self.block(body, d + 1);
+                self.loop_body(body, d + 1);
                 self.line(d, "}");
             }
             Stmt::For { var, start, end: None, body, .. } => {
@@ -346,25 +369,40 @@ impl<'a> Gen<'a> {
                 self.line(d + 1, &format!("volt_list* {l} = {list};"));
                 self.line(d + 1, &format!("for (int64_t {i} = 0; {i} < {l}->len; {i}++) {{"));
                 self.line(d + 2, &format!("{et} v_{var} = (({et}*){l}->data)[{i}];"));
-                self.block(body, d + 2);
+                self.loop_body(body, d + 2);
                 self.line(d + 1, "}");
                 self.line(d, "}");
             }
             Stmt::Match { value, arms } => self.match_stmt(value, arms, d),
             Stmt::Return { value: Some(v), .. } => {
                 let value = self.expr(v);
-                self.line(d, &format!("return {value};"));
-            }
-            Stmt::Return { value: None, .. } => {
-                if is_res_void(&self.ret) {
-                    let r = self.ctype(&self.ret.clone());
-                    self.line(d, &format!("return ({r}){{true}};"));
+                let defers = self.unwind(0);
+                if defers.is_empty() {
+                    self.line(d, &format!("return {value};"));
                 } else {
-                    self.line(d, "return;");
+                    // Rückgabewert zuerst auswerten, dann aufräumen
+                    let (rt, t) = (self.ctype(&self.ret.clone()), self.fresh("r"));
+                    self.line(d, &format!("{{ {rt} {t} = {value}; {defers}return {t}; }}"));
                 }
             }
-            Stmt::Break(_) => self.line(d, "break;"),
-            Stmt::Continue(_) => self.line(d, "continue;"),
+            Stmt::Return { value: None, .. } => {
+                let defers = self.unwind(0);
+                if is_res_void(&self.ret) {
+                    let r = self.ctype(&self.ret.clone());
+                    self.line(d, &format!("{{ {defers}return ({r}){{true}}; }}"));
+                } else {
+                    self.line(d, &format!("{{ {defers}return; }}"));
+                }
+            }
+            Stmt::Break(_) | Stmt::Continue(_) => {
+                let defers = self.unwind(self.loops.last().copied().unwrap_or(0));
+                let kw = if matches!(s, Stmt::Break(_)) { "break" } else { "continue" };
+                self.line(d, &format!("{{ {defers}{kw}; }}"));
+            }
+            Stmt::Defer(e) => {
+                let code = self.expr(e);
+                self.defers.last_mut().expect("defer steht immer in einem Block").push(code);
+            }
             Stmt::Expr(e) => {
                 let code = self.expr(e);
                 self.line(d, &format!("{code};"));
@@ -571,7 +609,12 @@ impl<'a> Gen<'a> {
                 let t = self.fresh("t");
                 let fail = if matches!(x.ty, Type::Res(_)) { format!("({rt}){{.ok = false, .err = {t}.err}}") } else { format!("({rt}){{0}}") };
                 let val = if *elem(&x.ty) == Type::Void { String::new() } else { format!(" {t}.val;") };
-                format!("({{ {xt} {t} = {code}; if (!{t}.ok) return {fail};{val} }})")
+                let defers = self.unwind(0);
+                if defers.is_empty() {
+                    format!("({{ {xt} {t} = {code}; if (!{t}.ok) return {fail};{val} }})")
+                } else {
+                    format!("({{ {xt} {t} = {code}; if (!{t}.ok) {{ {rt} {t}f = {fail}; {defers}return {t}f; }}{val} }})")
+                }
             }
             ExprKind::Wrap(x) => {
                 let wt = self.ctype(&e.ty);

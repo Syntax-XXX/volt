@@ -1,0 +1,60 @@
+fn ordnung()
+    print("anfang")
+    defer print("defer 1 (zuletzt)")
+    defer print("defer 2")
+    print("ende des Rumpfs")
+
+fn frueh(n: int) -> int
+    defer print("aufgeräumt {n}")
+    if n < 0
+        return -1
+    print("rechne {n}")
+    return n * 2
+
+fn schleife()
+    for i in 0..4
+        defer print("runde {i} fertig")
+        if i == 1
+            continue
+        if i == 3
+            break
+        print("arbeite {i}")
+    print("nach der Schleife")
+
+fn verschachtelt()
+    defer print("außen")
+    if true
+        defer print("innen")
+        print("im if")
+    print("hinter dem if")
+
+fn teile(a: int, b: int) -> int!
+    defer print("teile({a}, {b}) beendet")
+    if b == 0
+        return error("durch null")
+    return a / b
+
+fn rechne(a: int, b: int) -> int!
+    defer print("rechne beendet")
+    let x = teile(a, b)?
+    print("x = {x}")
+    return x + 1
+
+fn wert() -> int
+    var n = 1
+    defer print("n bei Rückgabe: {n}")
+    n = 5
+    return n
+
+fn main()
+    ordnung()
+    print(frueh(-5))
+    print(frueh(4))
+    schleife()
+    verschachtelt()
+    print(rechne(10, 2).or(-1))
+    print(rechne(1, 0).or(-1))
+    print(wert())
+    let xs = List[int]()
+    defer print("main fertig, Liste hat {xs.len()} Einträge")
+    xs.push(1)

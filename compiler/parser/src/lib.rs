@@ -399,6 +399,10 @@ impl Parser {
                 self.i += 1;
                 Stmt::Continue(span)
             }
+            Tok::Defer => {
+                self.i += 1;
+                Stmt::Defer(self.expr()?)
+            }
             Tok::Indent => {
                 return Err(Diag::new(span, "unerwartete Einrückung").tip("diese Zeile gehört zu keinem Block – rücke sie wie die Zeile darüber ein"));
             }

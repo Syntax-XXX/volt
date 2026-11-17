@@ -164,6 +164,8 @@ pub enum Stmt {
     Return { span: Span, value: Option<Expr> },
     Break(Span),
     Continue(Span),
+    /// `defer aufruf(…)`: läuft beim Verlassen des Blocks (auch bei return/break/continue/`?`), zuletzt Angemeldetes zuerst.
+    Defer(Expr),
     Expr(Expr),
 }
 
@@ -416,6 +418,7 @@ fn dump_block(out: &mut String, stmts: &[Stmt], depth: usize) {
             Stmt::Return { value: None, .. } => *out += &format!("{pad}return\n"),
             Stmt::Break(_) => *out += &format!("{pad}break\n"),
             Stmt::Continue(_) => *out += &format!("{pad}continue\n"),
+            Stmt::Defer(e) => *out += &format!("{pad}defer {}\n", dump_expr(e)),
             Stmt::Expr(e) => *out += &format!("{pad}{}\n", dump_expr(e)),
         }
     }

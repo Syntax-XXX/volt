@@ -659,6 +659,16 @@ impl Checker {
                     self.err(Diag::new(*span, "`break` und `continue` gibt es nur in Schleifen"));
                 }
             }
+            Stmt::Defer(e) => {
+                let ty = self.expr(e);
+                if !matches!(e.kind, ExprKind::Invoke { .. }) {
+                    if e.ty != Type::Unknown {
+                        self.err(Diag::new(e.span, "`defer` braucht einen Aufruf").tip("z. B. `defer print(\"fertig\")` oder `defer liste.clear()`"));
+                    }
+                } else if matches!(ty, Type::Res(_)) {
+                    self.err(Diag::new(e.span, "hier kann ein Fehler herauskommen, der nicht beachtet wird").tip("ein `defer` kann den Fehler nicht weitergeben – fange ihn im Aufruf selbst ab"));
+                }
+            }
             Stmt::Expr(e) => {
                 let ty = self.expr(e);
                 let call = match &e.kind {

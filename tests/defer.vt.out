@@ -1,0 +1,30 @@
+anfang
+ende des Rumpfs
+defer 2
+defer 1 (zuletzt)
+aufgeräumt -5
+-1
+rechne 4
+aufgeräumt 4
+8
+arbeite 0
+runde 0 fertig
+runde 1 fertig
+arbeite 2
+runde 2 fertig
+runde 3 fertig
+nach der Schleife
+im if
+innen
+hinter dem if
+außen
+teile(10, 2) beendet
+x = 5
+rechne beendet
+6
+teile(1, 0) beendet
+rechne beendet
+-1
+n bei Rückgabe: 5
+5
+main fertig, Liste hat 1 Einträge
