@@ -142,6 +142,28 @@ impl Parser {
         }
         hit
     }
+    /// Steht hier `Name[…](`? Dann ist es ein generischer Typ mit Argumenten und kein Index (`liste[0]`).
+    fn generic_ctor_ahead(&self) -> bool {
+        if self.peek_at(1) != &Tok::LBracket {
+            return false;
+        }
+        let mut depth = 0;
+        for k in 1.. {
+            match self.peek_at(k) {
+                Tok::LBracket => depth += 1,
+                Tok::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return self.peek_at(k + 1) == &Tok::LParen;
+                    }
+                }
+                Tok::Eof | Tok::Newline => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn unexpected(&self, wanted: &str) -> Diag {
         Diag::new(self.span(), format!("erwartet {wanted}, gefunden {}", self.peek()))
     }
@@ -371,9 +393,23 @@ impl Parser {
     fn struct_decl(&mut self) -> R<StructDecl> {
         self.expect(Tok::Struct)?;
         let (name, span) = self.ident("einen Namen für das Struct")?;
+        let mut generics = Vec::new();
+        if self.eat(&Tok::LBracket) {
+            loop {
+                let (g, at) = self.ident("einen Namen für den Typ-Parameter (z. B. `T`)")?;
+                if generics.contains(&g) {
+                    return Err(Diag::new(at, format!("der Typ-Parameter `{g}` steht doppelt")));
+                }
+                generics.push(g);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(Tok::RBracket)?;
+        }
         let mut methods = Vec::new();
         let fields = self.type_body(&mut methods, Self::field)?;
-        Ok(StructDecl { name, span, fields, methods, key: String::new() })
+        Ok(StructDecl { name, generics, span, fields, methods, key: String::new() })
     }
 
     fn enum_decl(&mut self) -> R<EnumDecl> {
@@ -726,6 +762,27 @@ impl Parser {
                 self.expect(Tok::LParen)?;
                 let close = self.expect(Tok::RParen)?;
                 return Ok(node(ExprKind::NewColl(ty), join(span, close)));
+            }
+            Tok::Ident(name) if name.chars().next().is_some_and(char::is_uppercase) && self.generic_ctor_ahead() => {
+                let ty = self.type_ref()?;
+                self.expect(Tok::LParen)?;
+                let mut args = Vec::new();
+                while !self.at(&Tok::RParen) {
+                    let arg_name = match (self.peek().clone(), self.peek_at(1)) {
+                        (Tok::Ident(n), Tok::Colon) => {
+                            let at = self.span();
+                            self.i += 2;
+                            Some((n, at))
+                        }
+                        _ => None,
+                    };
+                    args.push(Arg { name: arg_name, value: self.expr()? });
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+                let close = self.expect(Tok::RParen)?;
+                return Ok(node(ExprKind::GenericNew { ty, args }, join(span, close)));
             }
             Tok::Ident(name) => ExprKind::Ident(name),
             Tok::LBracket => {

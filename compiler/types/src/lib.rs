@@ -69,6 +69,12 @@ struct Inst {
     decl: Option<FnDecl>,
 }
 
+struct SInst {
+    unit: usize,
+    subst: HashMap<String, Type>,
+    decl: Option<StructDecl>,
+}
+
 struct Checker {
     /// Name und `use`-Liste je Datei.
     units: Vec<(String, HashSet<String>)>,
@@ -85,6 +91,11 @@ struct Checker {
     subst: HashMap<String, Type>,
     /// Erzeugte Kopien generischer Funktionen, Rümpfe werden nach allen anderen geprüft.
     insts: Vec<Inst>,
+    /// Generische Structs (Vorlagen) und ihre erzeugten Kopien.
+    generic_structs: HashMap<String, (usize, StructDecl)>,
+    sinsts: Vec<SInst>,
+    /// Kopie → (Vorlage, Typ-Argumente), damit `Paar[T, T]` gegen `Paar<int,int>` abgeglichen werden kann.
+    inst_args: HashMap<String, (String, Vec<Type>)>,
     unit: usize,
     /// Sichtbare Variablen, innerster Block zuletzt.
     scopes: Vec<HashMap<String, Var>>,
@@ -114,6 +125,9 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
         generics: HashMap::new(),
         subst: HashMap::new(),
         insts: Vec::new(),
+        generic_structs: HashMap::new(),
+        sinsts: Vec::new(),
+        inst_args: HashMap::new(),
         unit: 0,
         scopes: Vec::new(),
         ret: Type::Void,
@@ -143,7 +157,11 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
         }
         for s in &mut u.module.structs {
             s.key = c.qual(&s.name);
-            c.add_type(&s.name, &s.key, Kind::Struct, s.span);
+            if s.generics.is_empty() {
+                c.add_type(&s.name, &s.key, Kind::Struct, s.span);
+            } else {
+                c.generic_structs.insert(s.key.clone(), (ui, s.clone()));
+            }
         }
         for e in &mut u.module.enums {
             e.key = c.qual(&e.name);
@@ -154,6 +172,9 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
     for (ui, u) in units.iter_mut().enumerate() {
         c.unit = ui;
         for s in &mut u.module.structs {
+            if !s.generics.is_empty() {
+                continue;
+            }
             let fields = c.fields(&mut s.fields, &s.name);
             c.structs.insert(s.key.clone(), fields);
             for m in &mut s.methods {
@@ -188,7 +209,7 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
     // 3. Ein Typ darf sich nicht selbst (direkt oder über andere) als Wert enthalten.
     for (ui, u) in units.iter().enumerate() {
         c.unit = ui;
-        for (key, span) in u.module.structs.iter().map(|s| (&s.key, s.span)).chain(u.module.enums.iter().map(|e| (&e.key, e.span))) {
+        for (key, span) in u.module.structs.iter().filter(|s| s.generics.is_empty()).map(|s| (&s.key, s.span)).chain(u.module.enums.iter().map(|e| (&e.key, e.span))) {
             if c.contains_itself(key) {
                 c.err(Diag::new(span, format!("`{key}` enthält sich selbst")).tip(format!("ein Wert wäre unendlich groß – nutze `List[{key}]`")));
             }
@@ -198,7 +219,9 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
     for (ui, u) in units.iter_mut().enumerate() {
         c.unit = ui;
         for s in &mut u.module.structs {
-            c.defaults(&mut s.fields, &s.key, None);
+            if s.generics.is_empty() {
+                c.defaults(&mut s.fields, &s.key, None);
+            }
         }
         for e in &mut u.module.enums {
             for (i, v) in e.variants.iter_mut().enumerate() {
@@ -219,8 +242,10 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
     for (ui, u) in units.iter_mut().enumerate() {
         c.unit = ui;
         for s in &mut u.module.structs {
-            for m in &mut s.methods {
-                c.function(m, Some(&s.key));
+            if s.generics.is_empty() {
+                for m in &mut s.methods {
+                    c.function(m, Some(&s.key));
+                }
             }
         }
         for e in &mut u.module.enums {
@@ -234,22 +259,39 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
             }
         }
     }
-    // Kopien generischer Funktionen (können weitere Kopien auslösen)
-    let mut i = 0;
-    while i < c.insts.len() {
-        let mut decl = c.insts[i].decl.take().expect("Kopie wartet auf Prüfung");
-        c.unit = c.insts[i].unit;
-        c.subst = c.insts[i].subst.clone();
-        c.function(&mut decl, None);
-        c.subst.clear();
-        c.insts[i].decl = Some(decl);
-        i += 1;
+    // Kopien generischer Funktionen und Structs (jede kann weitere auslösen)
+    let (mut i, mut j) = (0, 0);
+    while i < c.insts.len() || j < c.sinsts.len() {
+        if i < c.insts.len() {
+            let mut decl = c.insts[i].decl.take().expect("Kopie wartet auf Prüfung");
+            c.unit = c.insts[i].unit;
+            c.subst = c.insts[i].subst.clone();
+            c.function(&mut decl, None);
+            c.subst.clear();
+            c.insts[i].decl = Some(decl);
+            i += 1;
+        } else {
+            let mut decl = c.sinsts[j].decl.take().expect("Kopie wartet auf Prüfung");
+            c.unit = c.sinsts[j].unit;
+            c.subst = c.sinsts[j].subst.clone();
+            let key = decl.key.clone();
+            for m in &mut decl.methods {
+                c.function(m, Some(&key));
+            }
+            c.subst.clear();
+            c.sinsts[j].decl = Some(decl);
+            j += 1;
+        }
     }
     for inst in std::mem::take(&mut c.insts) {
         units[inst.unit].module.fns.push(inst.decl.expect("geprüft"));
     }
+    for inst in std::mem::take(&mut c.sinsts) {
+        units[inst.unit].module.structs.push(inst.decl.expect("geprüft"));
+    }
     for u in units.iter_mut() {
         u.module.fns.retain(|f| f.generics.is_empty());
+        u.module.structs.retain(|s| s.generics.is_empty());
     }
     // `x += 1` mit unbekanntem `x` meldet sonst denselben Fehler zweimal.
     c.diags.dedup_by(|a, b| a.0 == b.0 && a.1.span == b.1.span && a.1.msg == b.1.msg);
@@ -401,6 +443,79 @@ impl Checker {
         }
     }
 
+    /// Schlüssel eines generischen Structs zu einem Namen wie `Paar` oder `modul.Paar`.
+    fn generic_key(&self, name: &str) -> Option<String> {
+        let key = match name.split_once('.') {
+            Some((module, _)) if self.uses(module) => name.to_string(),
+            Some(_) => return None,
+            None => self.qual(name),
+        };
+        self.generic_structs.contains_key(&key).then_some(key)
+    }
+
+    /// Kopie eines generischen Structs für konkrete Typen (einmal je Kombination): Felder, Methoden-Signaturen und
+    /// Standardwerte werden mit den echten Typen aufgelöst; die Methoden-Rümpfe prüft `check_program` danach.
+    fn instantiate_struct(&mut self, gkey: &str, args: Vec<Type>) -> Type {
+        let (ui, decl) = self.generic_structs[gkey].clone();
+        let key = format!("{gkey}<{}>", args.iter().map(|t| t.name()).collect::<Vec<_>>().join(","));
+        if !self.types.contains_key(&key) {
+            self.inst_args.insert(key.clone(), (gkey.to_string(), args.clone()));
+            let subst: HashMap<String, Type> = decl.generics.iter().cloned().zip(args).collect();
+            let (saved_unit, saved_subst) = (self.unit, std::mem::replace(&mut self.subst, subst.clone()));
+            self.unit = ui;
+            // vorab eintragen: ein Feld darf den eigenen Typ (z. B. in einer Liste) nennen
+            self.types.insert(key.clone(), Kind::Struct);
+            self.structs.insert(key.clone(), Vec::new());
+            let mut d = decl.clone();
+            d.generics.clear();
+            d.key = key.clone();
+            let fields = self.fields(&mut d.fields, &d.name);
+            self.structs.insert(key.clone(), fields);
+            for m in &mut d.methods {
+                self.signature(m, Some(&key));
+            }
+            self.defaults(&mut d.fields, &key, None);
+            self.unit = saved_unit;
+            self.subst = saved_subst;
+            self.sinsts.push(SInst { unit: ui, subst, decl: Some(d) });
+        }
+        Type::Struct(key)
+    }
+
+    /// `Paar(1, "a")` ohne Typ-Argumente: sie ergeben sich aus den Werten der Felder.
+    fn generic_ctor(&mut self, gkey: String, mut args: Vec<Arg>, span: Span) -> (ExprKind, Type) {
+        let decl = self.generic_structs[&gkey].1.clone();
+        let types: Vec<Type> = args.iter_mut().map(|a| self.value(&mut a.value)).collect();
+        let (mut bound, mut pos) = (HashMap::new(), 0);
+        for (a, t) in args.iter().zip(&types) {
+            let field = match &a.name {
+                None => {
+                    pos += 1;
+                    decl.fields.get(pos - 1)
+                }
+                Some((n, _)) => decl.fields.iter().find(|f| f.name == *n),
+            };
+            if let Some(f) = field {
+                self.unify(&f.ty_ref, t, &decl.generics, &mut bound);
+            }
+        }
+        for g in &decl.generics {
+            if !bound.contains_key(g) {
+                self.err(Diag::new(span, format!("bei `{}(…)` lässt sich der Typ `{g}` aus den Werten nicht erkennen", decl.name)).tip(format!("gib ihn an: `{}[{}](…)`", decl.name, decl.generics.iter().map(|_| "int").collect::<Vec<_>>().join(", "))));
+                return (ExprKind::Int(0), Type::Unknown);
+            }
+        }
+        let targs: Vec<Type> = decl.generics.iter().map(|g| bound[g].clone()).collect();
+        if targs.iter().any(|t| matches!(t, Type::Unknown | Type::None | Type::Error)) {
+            return (ExprKind::Int(0), Type::Unknown);
+        }
+        let ty = self.instantiate_struct(&gkey, targs);
+        let Type::Struct(key) = &ty else { unreachable!() };
+        let fields = self.structs[key].clone();
+        let args = self.ctor_args(&decl.name, &fields, args, span);
+        (ExprKind::Invoke { target: Target::New(key.clone()), args }, ty)
+    }
+
     /// Typ zu einem Namen wie `Player` oder `modul.Player`.
     fn type_key(&self, name: &str) -> Option<(String, Kind)> {
         let key = match name.split_once('.') {
@@ -434,6 +549,17 @@ impl Checker {
             ("Map", _) => {
                 self.err(Diag::new(t.span, "`Map` braucht zwei Typen").tip("z. B. `Map[str, int]`"));
                 Type::Unknown
+            }
+            (name, n) if self.generic_key(name).is_some() => {
+                let gkey = self.generic_key(name).expect("geprüft");
+                let want = self.generic_structs[&gkey].1.generics.clone();
+                if n != want.len() {
+                    self.err(Diag::new(t.span, format!("`{name}` braucht {} Typ-Argument(e), hier stehen {n}", want.len())).tip(format!("z. B. `{name}[{}]`", want.iter().map(|_| "int").collect::<Vec<_>>().join(", "))));
+                    Type::Unknown
+                } else {
+                    let args: Vec<Type> = t.args.iter().map(|a| self.resolve(a)).collect();
+                    if args.contains(&Type::Unknown) { Type::Unknown } else { self.instantiate_struct(&gkey, args) }
+                }
             }
             (name, n) => match self.type_key(name) {
                 Some(_) if n > 0 => {
@@ -1058,7 +1184,7 @@ impl Checker {
     }
 
     /// Typ-Parameter aus einem Argumenttyp ableiten: `List[T]` gegen `List[int]` ergibt `T = int`.
-    fn unify(r: &TypeRef, t: &Type, gens: &[String], out: &mut HashMap<String, Type>) {
+    fn unify(&self, r: &TypeRef, t: &Type, gens: &[String], out: &mut HashMap<String, Type>) {
         let mut t = t.clone();
         for c in r.suffix.iter().rev() {
             t = match (c, t) {
@@ -1076,14 +1202,24 @@ impl Checker {
                     out.insert(r.name.clone(), t);
                 }
             }
+        } else if let Type::Struct(k) = &t {
+            // generischer Typ: `Paar[T, T]` gegen die Kopie `Paar<int,int>`
+            if let Some((gkey, targs)) = self.inst_args.get(k) {
+                let same = |a: &str, b: &str| a == b || a.rsplit('.').next() == b.rsplit('.').next();
+                if same(gkey, &r.name) && r.args.len() == targs.len() {
+                    for (ra, ta) in r.args.iter().zip(targs) {
+                        self.unify(ra, ta, gens, out);
+                    }
+                }
+            }
         } else if r.name == "List" && r.args.len() == 1 {
             if let Type::List(x) = &t {
-                Self::unify(&r.args[0], x, gens, out);
+                self.unify(&r.args[0], x, gens, out);
             }
         } else if r.name == "Map" && r.args.len() == 2 {
             if let Type::Map(k, v) = &t {
-                Self::unify(&r.args[0], k, gens, out);
-                Self::unify(&r.args[1], v, gens, out);
+                self.unify(&r.args[0], k, gens, out);
+                self.unify(&r.args[1], v, gens, out);
             }
         }
     }
@@ -1099,7 +1235,7 @@ impl Checker {
         }
         let mut bound = HashMap::new();
         for (p, t) in decl.params.iter().zip(&types) {
-            Self::unify(&p.ty_ref, t, &decl.generics, &mut bound);
+            self.unify(&p.ty_ref, t, &decl.generics, &mut bound);
         }
         for g in &decl.generics {
             if !bound.contains_key(g) {
@@ -1204,6 +1340,9 @@ impl Checker {
             }
             (ExprKind::Int(0), Type::Unknown)
         };
+        if let Some(gkey) = self.generic_key(&shown) {
+            return self.generic_ctor(gkey, args, span);
+        }
         match self.resolve_path(&segs) {
             PathRes::Fn(key) if self.generics.contains_key(&key) => self.generic_call(key, args, span),
             PathRes::Fn(key) | PathRes::Static(key) if self.fns[&key].this.is_none() => {
@@ -1434,6 +1573,27 @@ impl Checker {
                 let (kind, ty) = self.call(*callee, args, span);
                 e.kind = kind;
                 ty
+            }
+            ExprKind::GenericNew { .. } => {
+                let ExprKind::GenericNew { ty, args } = take(e) else { unreachable!() };
+                let t = self.resolve(&ty);
+                match &t {
+                    Type::Struct(key) => {
+                        let fields = self.structs[key].clone();
+                        let args = self.ctor_args(&ty.name, &fields, args, span);
+                        e.kind = ExprKind::Invoke { target: Target::New(key.clone()), args };
+                        t
+                    }
+                    Type::Unknown => {
+                        e.kind = ExprKind::Int(0);
+                        Type::Unknown
+                    }
+                    other => {
+                        self.err(Diag::new(span, format!("{} erzeugt man nicht mit `(…)`", other.name())));
+                        e.kind = ExprKind::Int(0);
+                        Type::Unknown
+                    }
+                }
             }
             // Schon aufgelöst (z. B. Standardwerte, die zweimal geprüft würden).
             ExprKind::Invoke { .. } | ExprKind::Variant { .. } | ExprKind::Wrap(_) => e.ty.clone(),

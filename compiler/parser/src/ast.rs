@@ -148,6 +148,7 @@ pub struct FnDecl {
     pub key: String,
 }
 
+#[derive(Clone)]
 pub struct Field {
     pub name: String,
     pub span: Span,
@@ -156,8 +157,11 @@ pub struct Field {
     pub default: Option<Expr>,
 }
 
+#[derive(Clone)]
 pub struct StructDecl {
     pub name: String,
+    /// Typ-Parameter: `struct Paar[A, B]`; der Typchecker erzeugt je Typ-Kombination eine eigene Kopie.
+    pub generics: Vec<String>,
     pub span: Span,
     pub fields: Vec<Field>,
     pub methods: Vec<FnDecl>,
@@ -252,6 +256,8 @@ pub enum ExprKind {
     List(Vec<Expr>),
     /// `List[int]()` oder `Map[str, int]()`
     NewColl(TypeRef),
+    /// `Stapel[int]()` / `Paar[int, str](1, "a")`: generischer Typ mit ausdrücklichen Typ-Argumenten (der Typchecker macht daraus `Invoke`).
+    GenericNew { ty: TypeRef, args: Vec<Arg> },
     /// Aufruf, wie er im Quelltext steht. Der Typchecker macht daraus `Invoke` oder `Variant`.
     Call { callee: Box<Expr>, args: Vec<Arg> },
     Field(Box<Expr>, String),
@@ -342,7 +348,8 @@ pub fn dump(m: &Module) -> String {
         out += &format!("import c \"{}\" as {}{}\n", c.header, c.alias, c.libs.iter().map(|l| format!(" link \"{l}\"")).collect::<String>());
     }
     for s in &m.structs {
-        out += &format!("struct {}\n", s.name);
+        let gen = if s.generics.is_empty() { String::new() } else { format!("[{}]", s.generics.join(", ")) };
+        out += &format!("struct {}{gen}\n", s.name);
         dump_fields(&mut out, &s.fields);
         for f in &s.methods {
             dump_fn(&mut out, f, 1);
@@ -486,6 +493,7 @@ pub fn dump_expr(e: &Expr) -> String {
         ExprKind::Binary(op, l, r) => format!("({} {} {})", op.sym(), dump_expr(l), dump_expr(r)),
         ExprKind::List(items) => format!("(list{})", list(items.iter().map(dump_expr))),
         ExprKind::NewColl(t) => format!("(new {})", t.text()),
+        ExprKind::GenericNew { ty, args } => format!("(new {}{})", ty.text(), list(args.iter().map(|a| dump_expr(&a.value)))),
         ExprKind::Call { callee, args } => {
             let args = args.iter().map(|a| match &a.name {
                 Some((n, _)) => format!("{n}: {}", dump_expr(&a.value)),

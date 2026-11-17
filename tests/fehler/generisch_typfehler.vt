@@ -1,0 +1,6 @@
+struct Kiste[T]
+    inhalt: T
+
+fn main()
+    let k = Kiste(1)
+    let s: str = k.inhalt

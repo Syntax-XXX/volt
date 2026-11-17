@@ -666,7 +666,7 @@ impl<'a> Gen<'a> {
                 self.seq(ops, |v| format!("(({et}){{.tag = {index}, .as.v{index} = {{{}}}}})", v.join(", ")))
             }
             ExprKind::Invoke { target, args } => self.invoke(e, target, args),
-            ExprKind::Call { .. } => unreachable!("der Typchecker löst alle Aufrufe auf"),
+            ExprKind::Call { .. } | ExprKind::GenericNew { .. } => unreachable!("der Typchecker löst alle Aufrufe auf"),
         }
     }
 

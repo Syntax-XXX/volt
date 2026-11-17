@@ -1,0 +1,61 @@
+# Generische Typen: `struct Paar[A, B]` – für jede benutzte Kombination entsteht ein eigener, schneller Typ.
+struct Paar[A, B]
+    erstes: A
+    zweites: B
+
+    fn tauschen(self) -> Paar[B, A]
+        return Paar(self.zweites, self.erstes)
+
+    fn text(self) -> str
+        return "({self.erstes}, {self.zweites})"
+
+struct Stapel[T]
+    elemente: List[T]
+
+    fn lege(mut self, x: T)
+        self.elemente.push(x)
+
+    fn nimm(mut self) -> T?
+        return self.elemente.pop()
+
+    fn groesse(self) -> int
+        return self.elemente.len()
+
+struct Knoten[T]
+    wert: T
+    kinder: List[Knoten[T]]
+
+    fn summe_tiefe(self) -> int
+        var n = 1
+        for k in self.kinder
+            n += k.summe_tiefe()
+        return n
+
+fn kleiner[T](a: Paar[T, T]) -> T
+    if a.erstes < a.zweites
+        return a.erstes
+    return a.zweites
+
+fn main()
+    let p = Paar(1, "eins")
+    print(p.text())
+    print(p.tauschen().text())
+    print(Paar(2.5, true).text())
+
+    var s = Stapel[int](List[int]())
+    s.lege(10)
+    s.lege(20)
+    s.lege(30)
+    print(s.groesse())
+    print(s.nimm().or(-1))
+    print(s.nimm().or(-1))
+
+    var namen = Stapel[str](List[str]())
+    namen.lege("Anna")
+    print(namen.nimm().or("leer"))
+    print(namen.nimm().or("leer"))
+
+    let baum = Knoten(1, [Knoten(2, List[Knoten[int]]()), Knoten(3, [Knoten(4, List[Knoten[int]]())])])
+    print(baum.summe_tiefe())
+    print(kleiner(Paar(9, 4)))
+    print(kleiner(Paar("b", "a")))

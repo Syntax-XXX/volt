@@ -1,0 +1,6 @@
+struct Kiste[T]
+    inhalt: List[T]
+
+fn main()
+    let k = Kiste(List[int]())
+    let z = Kiste[int, str](List[int]())
