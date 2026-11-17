@@ -1,0 +1,114 @@
+# std: Listen. `use liste` → liste.sortiere(xs), liste.umkehren(xs), liste.bereich(0, 5), liste.kleinstes(xs) …
+
+# Sortiert aufsteigend, in der Liste selbst (Merge-Sort, O(n log n), stabil). Braucht `<` für den Typ.
+fn sortiere[T](xs: List[T])
+    let n = xs.len()
+    if n < 2
+        return
+    let puffer = List[T]()
+    for i in 0..n
+        puffer.push(xs[0])
+    var breite = 1
+    while breite < n
+        var links = 0
+        while links < n
+            let mitte = min(links + breite, n)
+            let rechts = min(links + 2 * breite, n)
+            var i = links
+            var j = mitte
+            var k = links
+            while i < mitte and j < rechts
+                if xs[j] < xs[i]
+                    puffer[k] = xs[j]
+                    j += 1
+                else
+                    puffer[k] = xs[i]
+                    i += 1
+                k += 1
+            while i < mitte
+                puffer[k] = xs[i]
+                i += 1
+                k += 1
+            while j < rechts
+                puffer[k] = xs[j]
+                j += 1
+                k += 1
+            links += 2 * breite
+        for t in 0..n
+            xs[t] = puffer[t]
+        breite *= 2
+
+# Dreht die Reihenfolge in der Liste selbst um.
+fn umkehren[T](xs: List[T])
+    var i = 0
+    var j = xs.len() - 1
+    while i < j
+        let t = xs[i]
+        xs[i] = xs[j]
+        xs[j] = t
+        i += 1
+        j -= 1
+
+# [von, von+1, …, bis-1]
+fn bereich(von: int, bis: int) -> List[int]
+    let out = List[int]()
+    for i in von..bis
+        out.push(i)
+    return out
+
+fn kleinstes[T](xs: List[T]) -> T?
+    if xs.len() == 0
+        return none
+    var m = xs[0]
+    for x in xs
+        if x < m
+            m = x
+    return m
+
+fn groesstes[T](xs: List[T]) -> T?
+    if xs.len() == 0
+        return none
+    var m = xs[0]
+    for x in xs
+        if m < x
+            m = x
+    return m
+
+# Neue Liste ohne Doppelte (Reihenfolge des ersten Auftretens). Braucht `==`.
+fn eindeutig[T](xs: List[T]) -> List[T]
+    let out = List[T]()
+    for x in xs
+        var da = false
+        for y in out
+            if x == y
+                da = true
+                break
+        if not da
+            out.push(x)
+    return out
+
+test "sortiere zahlen"
+    let xs = [5, 3, 9, 1, 3, 7, 2, 8, 6, 4, 0]
+    sortiere(xs)
+    for i in 1..xs.len()
+        assert(xs[i - 1] <= xs[i])
+    assert(xs[0] == 0)
+    assert(xs[10] == 9)
+
+test "sortiere texte"
+    let xs = ["pflaume", "apfel", "kirsche", "banane"]
+    sortiere(xs)
+    assert(xs[0] == "apfel")
+    assert(xs[3] == "pflaume")
+
+test "umkehren und bereich"
+    let xs = bereich(1, 6)
+    umkehren(xs)
+    assert(xs[0] == 5 and xs[4] == 1 and xs.len() == 5)
+
+test "kleinstes groesstes eindeutig"
+    let xs = [4, 2, 4, 9, 2]
+    assert(kleinstes(xs).or(-1) == 2)
+    assert(groesstes(xs).or(-1) == 9)
+    assert(kleinstes(List[int]()).or(-1) == -1)
+    assert(eindeutig(xs).len() == 3)

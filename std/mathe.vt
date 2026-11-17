@@ -1,0 +1,56 @@
+# std: Mathe für Zahlen. `use mathe` → mathe.ggt(12, 18), mathe.fakultaet(5), mathe.ist_primzahl(97) …
+
+fn begrenze[T](x: T, unten: T, oben: T) -> T
+    if x < unten
+        return unten
+    if oben < x
+        return oben
+    return x
+
+fn vorzeichen(x: int) -> int
+    if x < 0
+        return -1
+    if x > 0
+        return 1
+    return 0
+
+fn ggt(a: int, b: int) -> int
+    var x = abs(a)
+    var y = abs(b)
+    while y != 0
+        let t = x % y
+        x = y
+        y = t
+    return x
+
+fn fakultaet(n: int) -> int
+    var r = 1
+    for i in 2..n + 1
+        r *= i
+    return r
+
+fn ist_primzahl(n: int) -> bool
+    if n < 2
+        return false
+    var t = 2
+    while t * t <= n
+        if n % t == 0
+            return false
+        t += 1
+    return true
+
+fn potenz(basis: int, exponent: int) -> int
+    var r = 1
+    for i in 0..exponent
+        r *= basis
+    return r
+
+test "mathe"
+    assert(begrenze(15, 0, 10) == 10)
+    assert(begrenze(-1.5, 0.0, 1.0) == 0.0)
+    assert(vorzeichen(-9) == -1 and vorzeichen(0) == 0 and vorzeichen(4) == 1)
+    assert(ggt(12, 18) == 6)
+    assert(ggt(-12, 18) == 6)
+    assert(fakultaet(5) == 120)
+    assert(ist_primzahl(97) and not ist_primzahl(91) and not ist_primzahl(1))
+    assert(potenz(2, 10) == 1024)

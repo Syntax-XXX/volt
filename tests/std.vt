@@ -1,0 +1,28 @@
+# Die eingebaute Standardbibliothek: Demo in main, ihre eigenen Tests laufen mit `volt test tests/std.vt`.
+use liste
+use text
+use mathe
+use zeit
+
+fn main()
+    let zahlen = [42, 7, 19, 3, 25, 11]
+    liste.sortiere(zahlen)
+    print(zahlen.len())
+    print("kleinste {liste.kleinstes(zahlen).or(0)}, größte {liste.groesstes(zahlen).or(0)}")
+    let namen = ["Zora", "Anna", "Mia", "Ben"]
+    liste.sortiere(namen)
+    print(namen.join(", "))
+    liste.umkehren(namen)
+    print(namen.join(", "))
+    print(liste.bereich(1, 6).len())
+    print(liste.eindeutig([3, 1, 3, 2, 1]).len())
+    print("[{text.fuelle_links("7", 4)}] [{text.fuelle_rechts("ab", 4)}]")
+    print(text.wiederhole("=-", 5))
+    print(mathe.ggt(48, 18))
+    print(mathe.fakultaet(10))
+    print(mathe.begrenze(150, 0, 100))
+    print(mathe.ist_primzahl(7919))
+    print(zeit.cpu_ms() >= 0)
+
+test "eigener Test neben der Standardbibliothek"
+    assert(mathe.potenz(3, 4) == 81)

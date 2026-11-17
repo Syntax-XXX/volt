@@ -1,0 +1,13 @@
+# std: Zeit. `use zeit` → zeit.cpu_ms() misst Rechenzeit des Programms in Millisekunden (zum Messen von Abschnitten).
+import c "time.h" as t
+
+fn cpu_ms() -> int
+    return t.clock() / 1000
+
+test "zeit"
+    let a = cpu_ms()
+    var summe = 0
+    for i in 0..1000000
+        summe += i
+    assert(cpu_ms() >= a)
+    assert(summe > 0)

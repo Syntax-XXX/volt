@@ -79,6 +79,18 @@ fn fnv1a(parts: &[&[u8]]) -> u64 {
     h
 }
 
+/// Eingebaute Standardbibliothek (in Volt geschrieben, ins Programm `volt` eingebettet).
+const STD: &[(&str, &str)] = &[
+    ("liste", include_str!("../../std/liste.vt")),
+    ("text", include_str!("../../std/text.vt")),
+    ("mathe", include_str!("../../std/mathe.vt")),
+    ("zeit", include_str!("../../std/zeit.vt")),
+];
+
+fn std_module(name: &str) -> Option<&'static str> {
+    STD.iter().find(|m| m.0 == name).map(|m| m.1)
+}
+
 /// Eine Quelldatei: Hauptprogramm (Name leer) oder Modul aus `use name` (`name.vt` im selben Ordner).
 struct Source {
     file: String,
@@ -121,15 +133,20 @@ fn frontend(path: &Path, check: bool, tests: bool) -> Result<Vec<Unit>, ()> {
             if units.iter().any(|u| u.name == name) {
                 continue;
             }
+            // Eine Datei neben dem Programm hat Vorrang vor der eingebauten Standardbibliothek (`std/`).
             let file = dir.join(format!("{name}.vt"));
-            match fs::read_to_string(&file) {
-                Ok(src) => {
+            let found = match fs::read_to_string(&file) {
+                Ok(src) => Some((src, file.display().to_string())),
+                Err(_) => std_module(&name).map(|src| (src.to_string(), format!("std/{name}.vt"))),
+            };
+            match found {
+                Some((src, shown)) => {
                     let (module, d) = lex_parse(&src, false);
                     diags.extend(d.into_iter().map(|d| (units.len(), d)));
                     units.push(Unit { name: name.clone(), module });
-                    sources.push(Source { file: file.display().to_string(), src });
+                    sources.push(Source { file: shown, src });
                 }
-                Err(_) => diags.push((i, volt_lexer::Diag::new(span, format!("das Modul `{name}` gibt es nicht")).tip(format!("lege `{}` an", file.display())))),
+                None => diags.push((i, volt_lexer::Diag::new(span, format!("das Modul `{name}` gibt es nicht")).tip(format!("lege `{}` an – oder nimm ein eingebautes: {}", file.display(), STD.iter().map(|m| m.0).collect::<Vec<_>>().join(", "))))),
             }
         }
         i += 1;

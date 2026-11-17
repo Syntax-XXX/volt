@@ -136,3 +136,22 @@ fn volt_new_legt_lauffaehige_projekte_an() {
     assert!(!volt(&["new", dir.join("x").to_str().unwrap(), "--template", "gibtsnicht"]).status.success());
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn standardbibliothek_besteht_ihre_eigenen_tests() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let out = volt(&["test", root.join("tests/std.vt").to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success() && text.contains("0 fehlgeschlagen") && text.contains("ok       sortiere zahlen"), "{text}");
+}
+
+#[test]
+fn eigene_datei_hat_vorrang_vor_der_standardbibliothek() {
+    let dir = std::env::temp_dir().join(format!("volt-std-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("text.vt"), "fn wiederhole(s: str, n: int) -> str\n    return \"eigene\"\n").unwrap();
+    fs::write(dir.join("m.vt"), "use text\n\nfn main()\n    print(text.wiederhole(\"a\", 3))\n").unwrap();
+    let out = volt(&["run", dir.join("m.vt").to_str().unwrap()]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "eigene\n");
+    fs::remove_dir_all(&dir).ok();
+}
