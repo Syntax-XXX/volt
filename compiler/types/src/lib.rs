@@ -1458,13 +1458,13 @@ fn main()
     #[test]
     fn aufrufe() {
         let with = |call: &str| -> Vec<String> {
-            let src = format!("fn add(a: int, b: f64) -> f64\n    return a + b\n\nfn log(x: int)\n    print(x)\n\nfn main()\n    {call}\n");
+            let src = format!("fn add(a: int, b: f64) -> f64\n    return a + b\n\nfn zeige(x: int)\n    print(x)\n\nfn main()\n    {call}\n");
             run(&src).1.into_iter().map(|d| d.msg).collect()
         };
         assert_eq!(with("print(add(1, 2))"), Vec::<String>::new());
         assert_eq!(with("print(add(1))"), vec!["`add` erwartet 2 Argument(e), bekommen hat es 1"]);
         assert_eq!(with("print(add(1.5, 2))"), vec!["Argument 1 von `add` soll int sein, ist aber f64"]);
-        assert_eq!(with("let x = log(1)"), vec!["dieser Aufruf gibt keinen Wert zurück"]);
+        assert_eq!(with("let x = zeige(1)"), vec!["dieser Aufruf gibt keinen Wert zurück"]);
         assert_eq!(with("print(1, 2)"), vec!["`print` gibt genau einen Wert aus, bekommen hat es 2"]);
         assert_eq!(with("add(1, 2) == 3.0"), vec!["dieser Wert wird nicht benutzt"]);
     }
