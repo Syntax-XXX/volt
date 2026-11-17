@@ -1,6 +1,7 @@
 // Volt-Runtime (Phase 1): Ausgabe, String-Bau und sichere Division.
 // Der Compiler setzt diese Datei vor jedes erzeugte C-Programm.
 #include <inttypes.h>
+#include <setjmp.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -15,6 +16,101 @@ static void volt_panic(const char* msg, int line) {
     fflush(stdout);
     fprintf(stderr, "panic: %s (Zeile %d)\n", msg, line);
     exit(101);
+}
+
+// ---- Speicher: konservativer Mark-and-Sweep-Müllsammler ----
+// shortcut: Phase 3 räumt per GC auf statt per Ownership/Ref-Counting im Compiler. Der Sammler sucht Zeiger auf dem Stack,
+// in den Registern und in allen lebenden Blöcken (jedes Wort, das in einen Block zeigt, hält ihn am Leben, auch Zeiger ins Innere).
+// Läuft nur beim Reservieren (kein Hintergrund-Thread), Pausen ~1 ms je 8 MB neuer Daten. Upgrade: Compiler-seitige Besitzanalyse.
+typedef struct { size_t n; size_t mark; } volt_hdr;  // steht vor jedem Block (16 Bytes, Daten bleiben 16-ausgerichtet)
+static volt_hdr** volt_blks;
+static size_t volt_nblk, volt_cblk, volt_since, volt_limit = (size_t)8 << 20;
+static char* volt_stack_base;
+
+static void volt_gc_init(void* marker) { volt_stack_base = (char*)marker + 64; }
+
+static int volt_cmp_blk(const void* a, const void* b) {
+    const char *x = (const char*)*(volt_hdr* const*)a, *y = (const char*)*(volt_hdr* const*)b;
+    return x < y ? -1 : x > y;
+}
+
+static volt_hdr** volt_mstack;
+static size_t volt_nmark, volt_cmark;
+
+// Zeigt `w` in einen Block? Dann markieren und zum Durchsuchen vormerken.
+static void volt_mark_word(uintptr_t w) {
+    size_t lo = 0, hi = volt_nblk;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        uintptr_t start = (uintptr_t)volt_blks[mid];
+        if (w < start) hi = mid;
+        else if (w >= start + sizeof(volt_hdr) + volt_blks[mid]->n) lo = mid + 1;
+        else {
+            if (!volt_blks[mid]->mark) {
+                volt_blks[mid]->mark = 1;
+                if (volt_nmark == volt_cmark) {
+                    volt_cmark = volt_cmark ? volt_cmark * 2 : 1024;
+                    volt_mstack = realloc(volt_mstack, volt_cmark * sizeof *volt_mstack);
+                    if (!volt_mstack) { fprintf(stderr, "panic: kein Speicher mehr frei\n"); exit(101); }
+                }
+                volt_mstack[volt_nmark++] = volt_blks[mid];
+            }
+            return;
+        }
+    }
+}
+
+static void volt_mark_range(const char* from, const char* to) {
+    from = (const char*)(((uintptr_t)from + 7) & ~(uintptr_t)7);
+    for (; from + sizeof(uintptr_t) <= to; from += sizeof(uintptr_t)) volt_mark_word(*(const uintptr_t*)from);
+}
+
+#if defined(__GNUC__) && !defined(__TINYC__)
+__attribute__((noinline))
+#endif
+static void volt_gc_collect(void) {
+    jmp_buf regs;
+    volatile char top = 0;
+    setjmp(regs);  // Register in `regs` auf den Stack retten
+#if defined(__GNUC__) && !defined(__TINYC__)
+    __builtin_unwind_init();  // alle Callee-Saved-Register in diesen Stackrahmen
+#endif
+    if (!volt_nblk || !volt_stack_base) return;
+    qsort(volt_blks, volt_nblk, sizeof *volt_blks, volt_cmp_blk);
+    const char* sp = (const char*)&top < (const char*)&regs ? (const char*)&top : (const char*)&regs;
+    volt_mark_range(sp, volt_stack_base);
+    while (volt_nmark) {
+        volt_hdr* h = volt_mstack[--volt_nmark];
+        volt_mark_range((const char*)(h + 1), (const char*)(h + 1) + h->n);
+    }
+    size_t live = 0, j = 0;
+    for (size_t i = 0; i < volt_nblk; i++) {
+        volt_hdr* h = volt_blks[i];
+        if (h->mark) { h->mark = 0; live += h->n; volt_blks[j++] = h; }
+        else free(h);
+    }
+    volt_nblk = j;
+    volt_since = 0;
+    volt_limit = live * 2 > ((size_t)8 << 20) ? live * 2 : ((size_t)8 << 20);
+}
+
+// Neuer, genullter Block; `old` (aus volt_realloc) wird hineinkopiert. Der alte Block wird beim nächsten Lauf eingesammelt.
+static void* volt_realloc(void* old, size_t n) {
+    if (n == 0) n = 1;
+    volt_since += n;
+    if (volt_since > volt_limit) volt_gc_collect();
+    volt_hdr* h = calloc(1, sizeof(volt_hdr) + n);
+    if (!h) { volt_gc_collect(); h = calloc(1, sizeof(volt_hdr) + n); }
+    if (!h) volt_panic("kein Speicher mehr frei", 0);
+    h->n = n;
+    if (volt_nblk == volt_cblk) {
+        volt_cblk = volt_cblk ? volt_cblk * 2 : 4096;
+        volt_blks = realloc(volt_blks, volt_cblk * sizeof *volt_blks);
+        if (!volt_blks) volt_panic("kein Speicher mehr frei", 0);
+    }
+    volt_blks[volt_nblk++] = h;
+    if (old) { size_t on = ((volt_hdr*)old - 1)->n; memcpy(h + 1, old, on < n ? on : n); }
+    return h + 1;
 }
 
 // Kürzeste Schreibweise, die beim Einlesen wieder genau denselben Wert ergibt (wie Python):
@@ -41,10 +137,9 @@ static void volt_print_f64(double v) {
 }
 
 // Baut einen String aus Teilen. `tags` nennt je Argument den Typ: s = str, i = int, f = f64, b = bool.
-// shortcut: der Speicher wird nie freigegeben, Phase 3 (Ownership + Ref-Counting) räumt das auf.
 static volt_str volt_fmt(const char* tags, ...) {
     size_t len = 0, cap = 64;
-    char* out = malloc(cap);
+    char* out = volt_realloc(NULL, cap);
     va_list ap;
     va_start(ap, tags);
     for (; out && *tags; tags++) {
@@ -59,8 +154,7 @@ static volt_str volt_fmt(const char* tags, ...) {
         size_t n = strlen(part);
         if (len + n + 1 > cap) {
             cap = (len + n + 1) * 2;
-            out = realloc(out, cap);
-            if (!out) break;
+            out = volt_realloc(out, cap);
         }
         memcpy(out + len, part, n);
         len += n;
@@ -84,13 +178,7 @@ static int64_t volt_mod(int64_t a, int64_t b, int line) {
 }
 
 // ---- Phase 2: Listen, Maps, String-Funktionen, Eingabe ----
-// shortcut: Listen, Maps und neue Strings werden nie freigegeben, das kommt in Phase 3.
 
-static void* volt_realloc(void* p, size_t n) {
-    p = realloc(p, n ? n : 1);
-    if (!p) volt_panic("kein Speicher mehr frei", 0);
-    return p;
-}
 
 static char* volt_str_alloc(size_t n) {  // n Bytes plus Endnull
     char* s = volt_realloc(NULL, n + 1);

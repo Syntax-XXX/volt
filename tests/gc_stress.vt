@@ -1,0 +1,47 @@
+# Müllsammler-Stresstest: lebende Strings, Listen, Maps und Structs müssen mehrere Sammelläufe überstehen,
+# während sehr viel Abfall entsteht. Jede falsch freigegebene Stelle würde hier Daten zerstören.
+struct Eintrag
+    name: str
+    tags: List[str]
+
+fn baue(i: int) -> Eintrag
+    let tags = List[str]()
+    tags.push("tag-{i}")
+    tags.push("nr-{i * 3}")
+    return Eintrag("eintrag {i}", tags)
+
+fn abfall(n: int) -> int
+    var summe = 0
+    for k in 0..n
+        let s = "müll {k} {k * 7} und noch etwas Text, damit es Platz braucht"
+        summe += s.len()
+    return summe
+
+fn main()
+    let behalten = List[Eintrag]()
+    let index = Map[str, int]()
+    var verworfen = 0
+    for i in 0..4000
+        let e = baue(i)
+        behalten.push(e)
+        index[e.name] = i
+        verworfen += abfall(300)
+    print(verworfen)
+    var falsch = 0
+    for i in 0..behalten.len()
+        let e = behalten[i]
+        if e.name != "eintrag {i}"
+            falsch += 1
+        if e.tags[0] != "tag-{i}" or e.tags[1] != "nr-{i * 3}"
+            falsch += 1
+        if index["eintrag {i}"] != i
+            falsch += 1
+    print("falsch: {falsch}")
+    print(behalten.len())
+    print(index.len())
+    var lang = ""
+    for i in 0..200
+        lang = "{lang}{i % 10}"
+        abfall(500)
+    print(lang.len())
+    print(lang.replace("0", "").len())

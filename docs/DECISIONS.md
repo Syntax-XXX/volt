@@ -6,7 +6,7 @@
 4. **Kein Shadowing, `let` ist unveränderlich.** Das verhindert Verwechslungen, und die Fehlermeldung schlägt `var` vor.
 5. **`print` ist eingebaut**, bis es eine Standardbibliothek gibt (Phase 2).
 6. **`int`-Überlauf läuft über** (`-fwrapv`, tcc macht das ohnehin) statt undefiniert zu sein. Division durch 0 bricht sauber ab.
-7. **Strings aus Einfügungen werden nie freigegeben.** Das ist eine bewusste Abkürzung, Ownership und Ref-Counting kommen in Phase 3.
+7. **Speicher räumt ein konservativer Müllsammler auf** (Phase 3, siehe 18). Zuvor wurden Strings, Listen und Maps nie freigegeben.
 8. **Fehlermeldungen auf Deutsch**, mit Ort, Codeausschnitt und Tipp. Es werden mehrere auf einmal gemeldet.
 9. **Debug baut mit tcc, `--release` mit clang/gcc `-O2`.**
 
@@ -19,3 +19,8 @@
 15. **Map-Schlüssel nur `int` oder `str`** (Hash in der Runtime). Andere Schlüssel brauchen Hash/Gleichheit aus Traits (später).
 16. **Eigene Fehlerausgabe statt ariadne:** gleiche Qualität (Ort, Markierung, Tipp, mehrere Fehler), keine Abhängigkeit.
 17. **Noch nicht drin:** Generics/Traits, `f32`, Default-Parameter von Funktionen, `if … then … else` als Ausdruck – kommen später, wenn sie gebraucht werden.
+
+## Phase 3
+18. **Erst ein konservativer Mark-and-Sweep-GC, dann Besitzanalyse.** Ownership + Ref-Counting braucht Analyse im Compiler (Moves, Kopien von Structs mit Strings, Rückgaben, Temporäre) und viel Testfläche. Der Sammler (`runtime/volt_rt.h`) löst das Leck sofort: er sucht Zeiger auf dem Stack, in Registern und in allen lebenden Blöcken (auch Zeiger ins Innere), läuft nur beim Reservieren und braucht keine Änderung am erzeugten Code außer `volt_gc_init` in `main`. Preis: kurze Pausen (~1 ms je 8 MB neue Daten) und kein deterministisches Freigeben – das widerspricht Grundregel 3 und ist deshalb als `shortcut` markiert. Upgrade: Compiler-seitiges RC mit Elision, der Sammler bleibt nur für Zyklen.
+19. **Build-Cache:** der erzeugte C-Code (enthält die Runtime) + Compiler-Einstellung + Ziel ergeben einen FNV-1a-Schlüssel in `.volt-cache/<name>.key`; passt er und die Datei existiert, wird nicht neu übersetzt. Der Schlüssel wird erst nach erfolgreichem Bauen geschrieben.
+

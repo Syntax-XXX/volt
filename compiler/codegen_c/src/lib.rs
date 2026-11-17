@@ -37,9 +37,9 @@ pub fn emit_program(mods: &[&Module]) -> String {
     }
     let main_ret = mods[0].fns.iter().find(|f| f.name == "main").map(|f| f.ret.clone()).unwrap_or(Type::Void);
     let main = if is_res_void(&main_ret) {
-        "\nint main(void) {\n    volt_res_void r = v_main();\n    if (!r.ok) {\n        fflush(stdout);\n        fprintf(stderr, \"error: %s\\n\", r.err);\n        return 1;\n    }\n    return 0;\n}\n"
+        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    volt_res_void r = v_main();\n    if (!r.ok) {\n        fflush(stdout);\n        fprintf(stderr, \"error: %s\\n\", r.err);\n        return 1;\n    }\n    return 0;\n}\n"
     } else {
-        "\nint main(void) {\n    v_main();\n    return 0;\n}\n"
+        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    v_main();\n    return 0;\n}\n"
     };
     format!("{RUNTIME}\n{}\n{}{}{main}", g.types, g.protos, g.body)
 }
