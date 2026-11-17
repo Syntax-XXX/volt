@@ -7,6 +7,8 @@
 #define VOLT_NO_GC 1
 #else
 #include <setjmp.h>
+#include <pthread.h>
+#include <unistd.h>
 #endif
 #include <math.h>
 #include <stdarg.h>
@@ -33,7 +35,32 @@ static volt_hdr** volt_blks;
 static size_t volt_nblk, volt_cblk, volt_since, volt_limit = (size_t)8 << 20;
 static char* volt_stack_base;
 
-static void volt_gc_init(void* marker) { volt_stack_base = (char*)marker + 64; }
+#ifndef VOLT_NO_GC
+// Fäden (std/faden.vt): Volt-Code läuft immer nur in einem Faden – wer läuft, hält `volt_gil`. Gewechselt wird nur an
+// Blockierstellen (schlafen, warten, `pause`), dort legt der Faden vorher seinen Stack-Bereich und seine Register für den Sammler ab.
+typedef struct { pthread_t id; char* base; char* sp; jmp_buf regs; int live; } volt_thr;
+static pthread_mutex_t volt_gil = PTHREAD_MUTEX_INITIALIZER;
+static volt_thr* volt_thrs[512];
+static int volt_nthrs;
+static volt_thr* volt_me(void) {
+    pthread_t me = pthread_self();
+    for (int i = 0; i < volt_nthrs; i++)
+        if (volt_thrs[i] && volt_thrs[i]->live && pthread_equal(volt_thrs[i]->id, me)) return volt_thrs[i];
+    return 0;
+}
+#endif
+
+static void volt_gc_init(void* marker) {
+    volt_stack_base = (char*)marker + 64;
+#ifndef VOLT_NO_GC
+    volt_thr* t = calloc(1, sizeof *t);
+    t->id = pthread_self();
+    t->base = volt_stack_base;
+    t->live = 1;
+    volt_thrs[volt_nthrs++] = t;
+    pthread_mutex_lock(&volt_gil);
+#endif
+}
 
 static int volt_cmp_blk(const void* a, const void* b) {
     const char *x = (const char*)*(volt_hdr* const*)a, *y = (const char*)*(volt_hdr* const*)b;
@@ -96,7 +123,18 @@ static void volt_gc_collect(void) {
     if (!volt_nblk || !volt_stack_base) return;
     qsort(volt_blks, volt_nblk, sizeof *volt_blks, volt_cmp_blk);
     const char* sp = (const char*)&top < (const char*)&regs ? (const char*)&top : (const char*)&regs;
+#ifndef VOLT_NO_GC
+    volt_thr* me = volt_me();
+    volt_mark_range(sp, me ? me->base : volt_stack_base);
+    for (int i = 0; i < volt_nthrs; i++) {  // alle anderen Fäden: ihr abgelegter Stack und ihre Register
+        volt_thr* t = volt_thrs[i];
+        if (!t || t == me || !t->live || !t->base) continue;
+        if (t->sp) volt_mark_range(t->sp, t->base);
+        volt_mark_range((const char*)&t->regs, (const char*)&t->regs + sizeof t->regs);
+    }
+#else
     volt_mark_range(sp, volt_stack_base);
+#endif
     for (size_t r = 0; r < volt_nroots; r++) volt_mark_range(volt_roots[r].p, volt_roots[r].p + volt_roots[r].n);
     while (volt_nmark) {
         volt_hdr* h = volt_mstack[--volt_nmark];

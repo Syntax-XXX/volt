@@ -110,6 +110,7 @@ const STD: &[(&str, &str)] = &[
     ("mathe", include_str!("../../std/mathe.vt")),
     ("zeit", include_str!("../../std/zeit.vt")),
     ("web", include_str!("../../std/web.vt")),
+    ("faden", include_str!("../../std/faden.vt")),
 ];
 
 fn std_module(name: &str) -> Option<&'static str> {
@@ -268,7 +269,7 @@ fn compile_mode(path: &Path, release: bool, out: Option<PathBuf>, tests: bool) -
         for lib in units.iter().flat_map(|u| u.module.c_imports.iter().flat_map(|c| &c.libs)) {
             cmd.arg(format!("-l{lib}"));
         }
-        cmd.arg("-lm"); // sqrt, fabs
+        cmd.arg("-lm").arg("-lpthread"); // sqrt, fabs; Fäden
         if !cc.contains("tcc") {
             cmd.arg("-fwrapv"); // int läuft bei Überlauf definiert über; tcc macht das von sich aus
         }

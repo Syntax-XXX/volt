@@ -26,6 +26,10 @@ print("Summe = {summe}")
 
 `volt build x.vt --target web` baut aus einem Volt-Programm eine fertige Seite (WebAssembly + `index.html`), `volt serve x.vt` liefert sie aus und lädt bei jeder Änderung neu. `use web` verbindet das Programm mit der Seite (`examples/web_zaehler.vt`, `examples/web_todo.vt` – beide im echten Browser getestet). Braucht clang mit WebAssembly-Unterstützung. Behandler sind Funktionswerte oder Closures (`web.klick("#plus", erhoehen)`, `web.klick("#t{i}", fn() => umschalten(i))`). Noch offen: Komponenten-Syntax mit HTML-Vorlagen.
 
+## Fäden
+
+`use faden`: `faden.starte(f)`, `faden.Kanal[T]()` mit `sende`/`empfange`, `schlafe`, `warte` – kooperativ unter einer Sperre, der Müllsammler arbeitet mit allen Fäden (`examples/faeden.vt`).
+
 ## Lernen
 
 [docs/TUTORIAL.md](docs/TUTORIAL.md): „Lerne Volt in einer Stunde“ – 14 kurze Kapitel, jedes Beispiel wird automatisch getestet.

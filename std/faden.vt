@@ -1,0 +1,62 @@
+# std: Fäden und Kanäle. `use faden` → faden.starte(f), f.warte(), Kanal[int](), kanal.sende(x), kanal.empfange().
+# Volt-Code läuft immer nur in einem Faden zur Zeit und wechselt nur bei `schlafe`, `pause`, `warte` und `empfange`.
+# Zwischen diesen Stellen wird er nie unterbrochen – Daten teilen ist deshalb ohne Sperren sicher, echte Parallelität gibt es nicht.
+# Ein Programm endet, wenn `main` fertig ist (auch wenn Fäden noch laufen): mit `warte()` auf sie warten.
+import c "volt_thread.h" as t
+
+var aufgaben = List[fn()]()
+
+# Einstieg für neue Fäden (vom Programm aufgerufen, nicht direkt benutzen).
+fn __lauf(nr: int)
+    let f = aufgaben[nr]
+    f()
+
+struct Faden
+    nr: int
+
+    # Wartet, bis der Faden fertig ist.
+    fn warte(self)
+        t.volt_thread_join(self.nr)
+
+fn starte(f: fn()) -> Faden
+    aufgaben.push(f)
+    return Faden(t.volt_thread_spawn(aufgaben.len() - 1))
+
+fn schlafe(ms: int)
+    t.volt_thread_sleep(ms)
+
+# Lässt andere Fäden an die Reihe.
+fn pause()
+    t.volt_thread_pause()
+
+# Warteschlange zwischen Fäden. `Kanal[int]()` legt einen an; Kopien zeigen auf dieselbe Schlange.
+struct Kanal[T]
+    daten: List[T] = List[T]()
+    zu: List[bool] = [false]
+
+    fn sende(self, x: T)
+        self.daten.push(x)
+
+    # Wartet auf den nächsten Wert; `none`, wenn der Kanal geschlossen und leer ist.
+    fn empfange(self) -> T?
+        while self.daten.len() == 0
+            if self.zu[0]
+                return none
+            schlafe(1)
+        return self.daten.remove(0)
+
+    fn schliesse(self)
+        self.zu[0] = true
+
+    fn laenge(self) -> int
+        return self.daten.len()
+
+test "kanal ohne faeden"
+    let k = Kanal[int]()
+    k.sende(1)
+    k.sende(2)
+    assert(k.laenge() == 2)
+    assert(k.empfange().or(0) == 1)
+    k.schliesse()
+    assert(k.empfange().or(0) == 2)
+    assert(k.empfange().or(-1) == -1)

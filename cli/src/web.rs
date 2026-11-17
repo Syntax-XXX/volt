@@ -18,7 +18,7 @@ use std::{
 const VOLT_JS: &str = include_str!("../web/volt.js");
 const INDEX_HTML: &str = include_str!("../web/index.html");
 /// Eingebaute C-Header, die Volt-Module einbinden (`import c "volt_web.h" as w`).
-pub const HEADERS: &[(&str, &str)] = &[("volt_web.h", include_str!("../../runtime/volt_web.h"))];
+pub const HEADERS: &[(&str, &str)] = &[("volt_web.h", include_str!("../../runtime/volt_web.h")), ("volt_thread.h", include_str!("../../runtime/volt_thread.h"))];
 
 /// Legt die eingebauten Header im Cache neben der Quelle ab und gibt den Include-Ordner zurück.
 pub fn ensure_headers(dir: &Path) -> PathBuf {

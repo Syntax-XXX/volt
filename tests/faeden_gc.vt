@@ -1,0 +1,46 @@
+# Wie examples/faeden.vt, aber mit sehr viel Abfall: der Müllsammler läuft mehrfach, während andere Fäden warten. Die Gesamtlänge muss
+# stimmen (jedes Ergebnis hat 16 + 2·Ziffern Zeichen: 10·18 + 90·20 = 1980), sonst wurde Speicher falsch freigegeben.
+use faden
+
+fn erzeuge(k: faden.Kanal[int], von: int, bis: int)
+    for i in von..bis
+        k.sende(i)
+        if i % 10 == 0
+            faden.pause()
+
+fn main()
+    let zahlen = faden.Kanal[int]()
+    let ergebnisse = faden.Kanal[str]()
+
+    let a = faden.starte(fn() => erzeuge(zahlen, 0, 50))
+    let b = faden.starte(fn() => erzeuge(zahlen, 50, 100))
+
+    let rechner = faden.starte(fn() => rechne(zahlen, ergebnisse))
+
+    a.warte()
+    b.warte()
+    zahlen.schliesse()
+    rechner.warte()
+    ergebnisse.schliesse()
+
+    var anzahl = 0
+    var summe = 0
+    while true
+        let e = ergebnisse.empfange() else
+            break
+        anzahl += 1
+        summe += e.len()
+    print("{anzahl} Ergebnisse, Gesamtlänge {summe}")
+
+fn rechne(zahlen: faden.Kanal[int], ergebnisse: faden.Kanal[str])
+    var verarbeitet = 0
+    while true
+        let n = zahlen.empfange() else
+            break
+        # viel Abfall: zwingt den Müllsammler zu laufen, während andere Fäden warten
+        var s = ""
+        for i in 0..40000
+            s = "{n}-{i}"
+        ergebnisse.sende("Zahl {n} → {s}")
+        verarbeitet += 1
+    print("verarbeitet: {verarbeitet}")

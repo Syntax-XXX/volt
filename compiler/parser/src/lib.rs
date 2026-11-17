@@ -146,13 +146,21 @@ impl Parser {
         }
         hit
     }
-    /// Steht hier `Name[…](`? Dann ist es ein generischer Typ mit Argumenten und kein Index (`liste[0]`).
+    /// Steht hier `Name[…](` oder `modul.Name[…](`? Dann ist es ein generischer Typ mit Argumenten und kein Index (`liste[0]`).
     fn generic_ctor_ahead(&self) -> bool {
-        if self.peek_at(1) != &Tok::LBracket {
+        let upper = |t: &Tok| matches!(t, Tok::Ident(n) if n.chars().next().is_some_and(char::is_uppercase));
+        let first = if upper(self.peek()) {
+            0
+        } else if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1) == &Tok::Dot && upper(self.peek_at(2)) {
+            2
+        } else {
+            return false;
+        };
+        if self.peek_at(first + 1) != &Tok::LBracket {
             return false;
         }
         let mut depth = 0;
-        for k in 1.. {
+        for k in first + 1.. {
             match self.peek_at(k) {
                 Tok::LBracket => depth += 1,
                 Tok::RBracket => {
@@ -816,7 +824,7 @@ impl Parser {
                 let close = self.expect(Tok::RParen)?;
                 return Ok(node(ExprKind::NewColl(ty), join(span, close)));
             }
-            Tok::Ident(name) if name.chars().next().is_some_and(char::is_uppercase) && self.generic_ctor_ahead() => {
+            Tok::Ident(_) if self.generic_ctor_ahead() => {
                 let ty = self.type_ref()?;
                 self.expect(Tok::LParen)?;
                 let mut args = Vec::new();

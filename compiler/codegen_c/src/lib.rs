@@ -87,6 +87,12 @@ fn emit_mode(mods: &[&Module], mode: Mode) -> String {
     init += "}\n";
     let main_ret = mods[0].fns.iter().find(|f| f.name == "main").map(|f| f.ret.clone()).unwrap_or(Type::Void);
     let test_keys: Vec<String> = mods.iter().flat_map(|m| m.tests.iter().filter_map(|t| m.fns.iter().find(|f| f.name == t.1).map(|f| fname(&f.key)))).collect();
+    // Einstieg für Fäden (std/faden.vt): die Laufzeit ruft ihn in jedem neuen Faden auf
+    let thread_entry = if mods.iter().flat_map(|m| m.fns.iter()).any(|f| f.key == "faden.__lauf") {
+        format!("\nstatic void volt_thread_entry(int64_t idx) {{ {}(idx); }}\n", fname("faden.__lauf"))
+    } else {
+        String::new()
+    };
     let has_user_event = mods[0].fns.iter().any(|f| f.name == "ereignis" && f.params.len() == 1 && f.params[0].ty == Type::Int && f.ret == Type::Void);
     let web_dispatch = mods.iter().flat_map(|m| m.fns.iter()).any(|f| f.key == "web.fuehre_aus");
     let has_event = has_user_event || web_dispatch;
@@ -105,7 +111,7 @@ fn emit_mode(mods: &[&Module], mode: Mode) -> String {
     includes.sort();
     includes.dedup();
     let includes: String = includes.iter().map(|h| format!("#include \"{h}\"\n")).collect();
-    format!("{RUNTIME}\n{includes}\n{}\n{}{}{init}{main}", g.types, g.protos, g.body)
+    format!("{RUNTIME}\n{includes}\n{}\n{}{}{init}{thread_entry}{main}", g.types, g.protos, g.body)
 }
 
 fn is_res_void(t: &Type) -> bool {
