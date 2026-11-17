@@ -23,6 +23,8 @@ volt – die Programmiersprache Volt ⚡
   volt test <datei.vt>                            alle test-Blöcke ausführen
   volt fmt [--check] <datei…>                     Leerraum aufräumen (Leerzeichen am Zeilenende, Leerzeilen)
   volt lsp                                        Language-Server für Editoren (stdin/stdout)
+  volt add <name> <git-url> [--tag v]             Paket holen (nach .volt/pakete/, vermerkt in volt.toml); danach `use name`
+  volt install                                    alle Pakete aus volt.toml holen
   volt new <name> [--template cli|game|lib]       neues Projekt anlegen
   volt parse <datei.vt> [--ast]                   Syntax prüfen, mit --ast den Syntaxbaum zeigen
   volt <skript.vts>                               Volt Script direkt starten (auch per `#!/usr/bin/env volt`)
@@ -62,6 +64,8 @@ fn main() -> ExitCode {
         }),
         (Some("test"), Some(file)) => run_tests(file),
         (Some("fmt"), _) => fmt(&args[1..]),
+        (Some("add"), _) => add_package(&args[1..]),
+        (Some("install"), _) => install_packages(),
         (Some("lsp"), _) => {
             lsp::run();
             Ok(0)
@@ -175,7 +179,12 @@ fn load(path: &Path, src: String, check: bool, tests: bool) -> Result<Vec<Unit>,
             let file = dir.join(format!("{name}.vt"));
             let found = match fs::read_to_string(&file) {
                 Ok(src) => Some((src, file.display().to_string())),
-                Err(_) => std_module(&name).map(|src| (src.to_string(), format!("std/{name}.vt"))),
+                // Pakete (`volt add`): .volt/pakete/<name>/<name>.vt, sonst lib.vt
+                Err(_) => ["{n}.vt", "lib.vt"]
+                    .iter()
+                    .map(|f| dir.join(".volt/pakete").join(&name).join(f.replace("{n}", &name)))
+                    .find_map(|p| fs::read_to_string(&p).ok().map(|src| (src, p.display().to_string())))
+                    .or_else(|| std_module(&name).map(|src| (src.to_string(), format!("std/{name}.vt")))),
             };
             match found {
                 Some((src, shown)) => {
@@ -316,6 +325,73 @@ fn watch(path: &Path) -> Result<u8, ()> {
 }
 
 /// `volt test`: jeder Test läuft als eigener Prozess (ein Abbruch in einem Test beendet nicht die anderen).
+/// `volt add name url [--tag v]`: Git-Repository nach `.volt/pakete/<name>` holen und in `volt.toml` eintragen.
+fn add_package(args: &[String]) -> Result<u8, ()> {
+    let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let tag = args.iter().position(|a| a == "--tag").and_then(|i| args.get(i + 1)).cloned();
+    let (Some(name), Some(url)) = (pos.first(), pos.get(1)) else {
+        eprintln!("error: `volt add <name> <git-url> [--tag v1.0]`\n     = tipp: z. B. `volt add geo https://example.org/geo.git`");
+        return Err(());
+    };
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '_') || name.is_empty() {
+        eprintln!("error: `{name}` ist kein gültiger Paketname (Buchstaben, Ziffern, _)");
+        return Err(());
+    }
+    fetch_package(name, url, tag.as_deref())?;
+    let mut toml = fs::read_to_string("volt.toml").unwrap_or_else(|_| "[pakete]\n".to_string());
+    if !toml.lines().any(|l| l.starts_with(&format!("{name} "))) {
+        if !toml.ends_with('\n') {
+            toml.push('\n');
+        }
+        toml += &format!("{name} = \"{url}{}\"\n", tag.map(|t| format!("#{t}")).unwrap_or_default());
+        fs::write("volt.toml", toml).map_err(|e| eprintln!("error: volt.toml lässt sich nicht schreiben: {e}"))?;
+    }
+    println!("Paket `{name}` geholt – nutze es mit `use {name}`");
+    Ok(0)
+}
+
+fn fetch_package(name: &str, url: &str, tag: Option<&str>) -> Result<(), ()> {
+    let dest = Path::new(".volt/pakete").join(name);
+    if dest.exists() {
+        fs::remove_dir_all(&dest).map_err(|e| eprintln!("error: `{}` lässt sich nicht ersetzen: {e}", dest.display()))?;
+    }
+    fs::create_dir_all(".volt/pakete").map_err(|e| eprintln!("error: .volt/pakete lässt sich nicht anlegen: {e}"))?;
+    let mut cmd = Command::new("git");
+    cmd.args(["clone", "--quiet", "--depth", "1"]);
+    if let Some(t) = tag {
+        cmd.args(["--branch", t]);
+    }
+    let out = cmd.arg(url).arg(&dest).output().map_err(|e| eprintln!("error: git lässt sich nicht starten: {e}\n     = tipp: Pakete holt `volt` mit git"))?;
+    if !out.status.success() {
+        eprintln!("error: `{url}` lässt sich nicht holen:\n{}", String::from_utf8_lossy(&out.stderr).trim());
+        return Err(());
+    }
+    let _ = fs::remove_dir_all(dest.join(".git"));
+    if !dest.join(format!("{name}.vt")).exists() && !dest.join("lib.vt").exists() {
+        eprintln!("warnung: das Paket enthält weder `{name}.vt` noch `lib.vt` – `use {name}` findet nichts");
+    }
+    Ok(())
+}
+
+/// `volt install`: alles aus `volt.toml` (Abschnitt [pakete], Zeilen `name = "url#tag"`) holen.
+fn install_packages() -> Result<u8, ()> {
+    let toml = fs::read_to_string("volt.toml").map_err(|_| eprintln!("error: keine volt.toml hier\n     = tipp: `volt add name url` legt sie an"))?;
+    let mut n = 0;
+    for line in toml.lines() {
+        let Some((name, rest)) = line.split_once('=') else { continue };
+        let url = rest.trim().trim_matches('"');
+        let (url, tag) = url.split_once('#').map_or((url, None), |(u, t)| (u, Some(t)));
+        if name.trim().is_empty() || name.starts_with('[') || url.is_empty() {
+            continue;
+        }
+        fetch_package(name.trim(), url, tag)?;
+        println!("geholt: {}", name.trim());
+        n += 1;
+    }
+    println!("{n} Paket(e)");
+    Ok(0)
+}
+
 fn run_tests(path: &Path) -> Result<u8, ()> {
     let (bin, names) = compile_mode(path, false, None, true)?;
     if names.is_empty() {

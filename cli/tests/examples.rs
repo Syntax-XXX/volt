@@ -212,3 +212,52 @@ fn language_server_meldet_fehler_und_vervollstaendigt() {
     assert!(text.contains("soll str sein") && text.contains("publishDiagnostics"), "{text}");
     assert!(text.contains("\"label\":\"sortiere\""), "{text}");
 }
+
+/// Jedes ```volt-Beispiel im Tutorial muss die Prüfung bestehen (und `main` haben, damit es sich wirklich starten lässt).
+#[test]
+fn tutorial_beispiele_sind_gueltig() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let text = fs::read_to_string(root.join("docs/TUTORIAL.md")).unwrap();
+    let dir = std::env::temp_dir().join(format!("volt-tutorial-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let mut count = 0;
+    for block in text.split("```volt\n").skip(1) {
+        let code = block.split("```").next().unwrap();
+        count += 1;
+        let file = dir.join(format!("b{count}.vt"));
+        fs::write(&file, code).unwrap();
+        let out = volt(&["run", file.to_str().unwrap()]);
+        assert!(out.status.success(), "Tutorial-Beispiel {count} schlägt fehl:\n{code}\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+    assert!(count >= 14, "zu wenige Beispiele: {count}");
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn paketmanager_holt_pakete_per_git() {
+    let dir = std::env::temp_dir().join(format!("volt-pkg-{}", std::process::id()));
+    let repo = dir.join("geo-repo");
+    let proj = dir.join("projekt");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&proj).unwrap();
+    fs::write(repo.join("geo.vt"), "fn doppelt(x: int) -> int\n    return x * 2\n").unwrap();
+    let git = |args: &[&str], cwd: &Path| {
+        let o = Command::new("git").args(args).current_dir(cwd).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").output().unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+    };
+    git(&["init", "-q"], &repo);
+    git(&["add", "."], &repo);
+    git(&["commit", "-q", "-m", "x"], &repo);
+    fs::write(proj.join("main.vt"), "use geo\n\nfn main()\n    print(geo.doppelt(21))\n").unwrap();
+    let volt_in = |args: &[&str]| Command::new(env!("CARGO_BIN_EXE_volt")).args(args).current_dir(&proj).output().unwrap();
+    let add = volt_in(&["add", "geo", repo.to_str().unwrap()]);
+    assert!(add.status.success(), "{}", String::from_utf8_lossy(&add.stderr));
+    assert!(fs::read_to_string(proj.join("volt.toml")).unwrap().contains("geo = "));
+    assert_eq!(String::from_utf8_lossy(&volt_in(&["run", "main.vt"]).stdout), "42\n");
+    // `volt install` holt alles neu, auch nach dem Löschen
+    fs::remove_dir_all(proj.join(".volt")).unwrap();
+    assert!(volt_in(&["install"]).status.success());
+    assert_eq!(String::from_utf8_lossy(&volt_in(&["run", "main.vt"]).stdout), "42\n");
+    assert!(!volt_in(&["add", "x", "/gibt/es/nicht"]).status.success());
+    fs::remove_dir_all(&dir).ok();
+}
