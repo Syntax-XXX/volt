@@ -18,10 +18,14 @@ for i in 1..101
 print("Summe = {summe}")
 ```
 
+## Was geht schon (Phase 2)
+
+`struct` mit Methoden, `enum` mit Daten und `match`, Optionals `T?`, Fehler `T!` mit `?`, `List`, `Map`, String-Funktionen, Module mit `use`. Meilenstein: [examples/abenteuer.vt](examples/abenteuer.vt), ein Textadventure komplett in Volt (`volt run examples/abenteuer.vt`).
+
 ## Bauen und testen
 
 ```sh
-cargo test                              # Lexer, Parser, Typen, C-Backend, Beispiele
+cargo test                              # Lexer, Parser, Typen, C-Backend + alle Programme in examples/ und tests/
 cargo install --path cli                # `volt` nach ~/.cargo/bin
 volt run examples/fib.vt
 volt examples/hello.vts

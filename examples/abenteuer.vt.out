@@ -1,0 +1,30 @@
+Die vergessene Serverhalle – tippe hilfe für Befehle.
+== Flur ==
+Ein kalter Flur. Neonlicht flackert.
+Hier liegt: taschenlampe
+Ausgänge: norden
+> == Flur ==
+Ein kalter Flur. Neonlicht flackert.
+Hier liegt: taschenlampe
+Ausgänge: norden
+> Hier gibt es kein „schluessel“.
+> Es ist stockdunkel. Du siehst nichts.
+> Im Dunkeln findest du nichts.
+> „fliegen“ verstehe ich nicht – tippe hilfe
+> == Flur ==
+Ein kalter Flur. Neonlicht flackert.
+Hier liegt: taschenlampe
+Ausgänge: norden
+> Du nimmst: taschenlampe
+> == Serverhalle ==
+Reihen von Racks summen leise.
+Hier liegt: schluessel
+Ausgänge: sueden, osten
+> Du nimmst: schluessel
+> Du trägst: taschenlampe, schluessel
+> == Rack 42 ==
+Ein verschlossener Schrank mit blinkender Konsole.
+Ausgänge: westen
+> Damit passiert hier nichts.
+> Der Schrank springt auf. Auf der Konsole steht: SYSTEM GERETTET.
+Gewonnen nach 12 Zügen!

@@ -1,0 +1,141 @@
+# Die vergessene Serverhalle – ein kleines Textadventure, komplett in Volt.
+# Meilenstein Phase 2: struct, enum mit Daten, match, List, Map, Optionals, Results, input.
+#
+# Befehle: gehe <richtung>, nimm <ding>, benutze <ding>, schau, inventar, hilfe, ende
+
+struct Raum
+    name: str
+    text: str
+    ausgaenge: Map[str, str]
+    dinge: List[str]
+    dunkel: bool = false
+
+enum Befehl
+    Gehe(richtung: str)
+    Nimm(ding: str)
+    Benutze(ding: str)
+    Schau
+    Inventar
+    Hilfe
+    Ende
+
+struct Spiel
+    ort: str
+    raeume: Map[str, Raum]
+    inventar: List[str]
+    zuege: int = 0
+    fertig: bool = false
+
+    fn raum(self) -> Raum
+        return self.raeume[self.ort]
+
+    fn hat(self, ding: str) -> bool
+        return self.inventar.contains(ding)
+
+# Text → Befehl. Unbekanntes ist ein Fehler mit Erklärung.
+fn lies(zeile: str) -> Befehl!
+    let woerter = zeile.trim().lower().split(" ")
+    let wort = woerter[0]
+    var rest = ""
+    if woerter.len() > 1
+        rest = woerter[1]
+    match wort
+        "gehe" => return mit_ziel(rest, "wohin?", 0)
+        "g" => return mit_ziel(rest, "wohin?", 0)
+        "nimm" => return mit_ziel(rest, "was denn?", 1)
+        "benutze" => return mit_ziel(rest, "was denn?", 2)
+        "schau" => return Befehl.Schau
+        "inventar" => return Befehl.Inventar
+        "i" => return Befehl.Inventar
+        "hilfe" => return Befehl.Hilfe
+        "ende" => return Befehl.Ende
+        "" => return error("sag doch was")
+        _ => return error("„{wort}“ verstehe ich nicht – tippe hilfe")
+
+fn mit_ziel(ziel: str, frage: str, art: int) -> Befehl!
+    if ziel == ""
+        return error(frage)
+    match art
+        0 => return Befehl.Gehe(ziel)
+        1 => return Befehl.Nimm(ziel)
+        _ => return Befehl.Benutze(ziel)
+
+fn welt() -> Map[str, Raum]
+    let w = Map[str, Raum]()
+    let a = Map[str, str]()
+    a["norden"] = "halle"
+    w["flur"] = Raum("Flur", "Ein kalter Flur. Neonlicht flackert.", a, ["taschenlampe"])
+    let b = Map[str, str]()
+    b["sueden"] = "flur"
+    b["osten"] = "rack"
+    w["halle"] = Raum("Serverhalle", "Reihen von Racks summen leise.", b, ["schluessel"], dunkel: true)
+    let c = Map[str, str]()
+    c["westen"] = "halle"
+    w["rack"] = Raum("Rack 42", "Ein verschlossener Schrank mit blinkender Konsole.", c, List[str]())
+    return w
+
+fn zeige(spiel: Spiel)
+    let r = spiel.raum()
+    if r.dunkel and not spiel.hat("taschenlampe")
+        print("Es ist stockdunkel. Du siehst nichts.")
+        return
+    print("== {r.name} ==")
+    print(r.text)
+    if r.dinge.len() > 0
+        print("Hier liegt: {r.dinge.join(", ")}")
+    var wege = List[str]()
+    for k in r.ausgaenge.keys()
+        wege.push(k)
+    print("Ausgänge: {wege.join(", ")}")
+
+fn main()
+    var spiel = Spiel("flur", welt(), List[str]())
+    print("Die vergessene Serverhalle – tippe hilfe für Befehle.")
+    zeige(spiel)
+    while not spiel.fertig
+        let zeile = input("> ") else
+            print("")
+            break
+        let befehl = lies(zeile) else grund
+            print(grund)
+            continue
+        spiel.zuege += 1
+        match befehl
+            Gehe(richtung)
+                if let ziel = spiel.raum().ausgaenge.get(richtung)
+                    spiel.ort = ziel
+                    zeige(spiel)
+                else
+                    print("Da geht es nicht weiter.")
+            Nimm(ding)
+                let r = spiel.raum()
+                if r.dunkel and not spiel.hat("taschenlampe")
+                    print("Im Dunkeln findest du nichts.")
+                else if r.dinge.contains(ding)
+                    for i in 0..r.dinge.len()
+                        if r.dinge[i] == ding
+                            r.dinge.remove(i)
+                            break
+                    spiel.inventar.push(ding)
+                    print("Du nimmst: {ding}")
+                else
+                    print("Hier gibt es kein „{ding}“.")
+            Benutze(ding)
+                if not spiel.hat(ding)
+                    print("Du hast kein „{ding}“.")
+                else if ding == "schluessel" and spiel.ort == "rack"
+                    print("Der Schrank springt auf. Auf der Konsole steht: SYSTEM GERETTET.")
+                    print("Gewonnen nach {spiel.zuege} Zügen!")
+                    spiel.fertig = true
+                else
+                    print("Damit passiert hier nichts.")
+            Schau => zeige(spiel)
+            Inventar
+                if spiel.inventar.len() == 0
+                    print("Du trägst nichts.")
+                else
+                    print("Du trägst: {spiel.inventar.join(", ")}")
+            Hilfe => print("gehe <richtung>, nimm <ding>, benutze <ding>, schau, inventar, ende")
+            Ende
+                print("Bis bald!")
+                spiel.fertig = true
