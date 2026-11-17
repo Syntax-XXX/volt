@@ -1,0 +1,46 @@
+# Traits: Schranken für generische Funktionen. Wer die Methoden hat, erfüllt das Trait – ohne `impl`.
+trait Beschreibbar
+    fn beschreibe(self) -> str
+
+trait Flaeche
+    fn flaeche(self) -> f64
+    fn name(self) -> str
+
+struct Kreis
+    r: f64
+
+    fn flaeche(self) -> f64
+        return 3.0 * self.r * self.r
+
+    fn name(self) -> str
+        return "Kreis"
+
+struct Rechteck
+    b: f64
+    h: f64
+
+    fn flaeche(self) -> f64
+        return self.b * self.h
+
+    fn name(self) -> str
+        return "Rechteck"
+
+    fn beschreibe(self) -> str
+        return "{self.b} x {self.h}"
+
+fn zeige[T: Flaeche](x: T)
+    print("{x.name()}: {x.flaeche()}")
+
+fn groesste[T: Flaeche](a: T, b: T) -> T
+    if a.flaeche() < b.flaeche()
+        return b
+    return a
+
+fn drucke[T: Beschreibbar](x: T)
+    print(x.beschreibe())
+
+fn main()
+    zeige(Kreis(2.0))
+    zeige(Rechteck(2.0, 5.0))
+    print(groesste(Kreis(1.0), Kreis(3.0)).r)
+    drucke(Rechteck(1.5, 2.0))

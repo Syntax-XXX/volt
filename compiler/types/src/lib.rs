@@ -85,6 +85,8 @@ struct Checker {
     fns: HashMap<String, Sig>,
     /// Konstanten aus C-Headern (`m.M_PI`), als Literal eingesetzt.
     cconsts: HashMap<String, CConst>,
+    /// Traits: Name → Methoden-Köpfe (Name, Anzahl Parameter).
+    traits: HashMap<String, Vec<(String, usize)>>,
     /// Generische Funktionen (Vorlagen): Schlüssel → (Datei, Deklaration).
     generics: HashMap<String, (usize, FnDecl)>,
     /// Aktuell eingesetzte Typ-Parameter beim Prüfen einer Kopie (`T` → `int`).
@@ -124,6 +126,7 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
         variants: HashMap::new(),
         fns: HashMap::new(),
         cconsts: HashMap::new(),
+        traits: HashMap::new(),
         generics: HashMap::new(),
         subst: HashMap::new(),
         insts: Vec::new(),
@@ -138,6 +141,15 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
         diags: Vec::new(),
     };
     let names: HashSet<String> = units.iter().map(|u| u.name.clone()).collect();
+    // Traits sammeln (programmweit, Name muss eindeutig sein)
+    for (ui, u) in units.iter().enumerate() {
+        c.unit = ui;
+        for t in &u.module.traits {
+            if c.traits.insert(t.name.clone(), t.methods.iter().map(|m| (m.name.clone(), m.params.len())).collect()).is_some() {
+                c.err(Diag::new(t.span, format!("das Trait `{}` gibt es schon", t.name)));
+            }
+        }
+    }
     // 0. C-Importe: Funktionen als `alias.name`, Konstanten als `alias.NAME`; der Alias zählt wie ein Modul.
     for (ui, u) in units.iter().enumerate() {
         for ci in &u.module.c_imports {
@@ -1266,6 +1278,25 @@ impl Checker {
         }
         if bound.values().any(|t| matches!(t, Type::Unknown | Type::None | Type::Error)) {
             return (ExprKind::Int(0), Type::Unknown);
+        }
+        for (g, tname, at) in &decl.bounds {
+            let Some(methods) = self.traits.get(tname).cloned() else {
+                self.err(Diag::new(*at, format!("das Trait `{tname}` gibt es nicht")));
+                return (ExprKind::Int(0), Type::Unknown);
+            };
+            let owner = match &bound[g] {
+                Type::Struct(k) | Type::Enum(k) => Some(k.clone()),
+                _ => None,
+            };
+            let missing: Vec<String> = methods
+                .iter()
+                .filter(|(m, n)| !owner.as_ref().is_some_and(|k| self.fns.get(&format!("{k}.{m}")).is_some_and(|sg| sg.this.is_some() && sg.params.len() == *n)))
+                .map(|(m, _)| m.clone())
+                .collect();
+            if !missing.is_empty() {
+                self.err(Diag::new(span, format!("`{}` erfüllt das Trait `{tname}` nicht (für `{g}` bei `{}`)", bound[g].name(), decl.name)).tip(format!("es fehlt: {}", missing.iter().map(|m| format!("fn {m}(self, …)")).collect::<Vec<_>>().join(", "))));
+                return (ExprKind::Int(0), Type::Unknown);
+            }
         }
         let inst_key = format!("{key}<{}>", decl.generics.iter().map(|g| bound[g].name()).collect::<Vec<_>>().join(","));
         if !self.fns.contains_key(&inst_key) {

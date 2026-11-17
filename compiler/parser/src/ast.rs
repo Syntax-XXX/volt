@@ -83,8 +83,17 @@ pub struct CImport {
     pub consts: Vec<(String, CConst)>,
 }
 
+/// `trait Name` mit Methoden-Köpfen (ohne Rumpf): wer diese Methoden hat, erfüllt das Trait (strukturell, ohne `impl`).
+#[derive(Clone)]
+pub struct TraitDecl {
+    pub name: String,
+    pub span: Span,
+    pub methods: Vec<FnDecl>,
+}
+
 #[derive(Default)]
 pub struct Module {
+    pub traits: Vec<TraitDecl>,
     /// Variablen auf oberster Ebene (`var zaehler = 0`): leben so lange wie das Programm, werden vor `main` der Reihe nach gesetzt.
     pub globals: Vec<Stmt>,
     /// `test "name"`-Blöcke: (Anzeigename, Funktionsname `__test_N`); die Funktion steht zusätzlich in `fns`.
@@ -139,6 +148,8 @@ pub struct FnDecl {
     pub name: String,
     /// Typ-Parameter: `fn groesser[T](a: T, b: T) -> T`. Der Typchecker erzeugt je Typ eine eigene Kopie.
     pub generics: Vec<String>,
+    /// Schranken: `fn f[T: Zeichenbar]` → ("T", "Zeichenbar", Ort).
+    pub bounds: Vec<(String, String, Span)>,
     pub span: Span,
     /// Nur bei Methoden.
     pub this: Option<SelfKind>,

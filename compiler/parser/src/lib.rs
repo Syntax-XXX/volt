@@ -19,7 +19,7 @@ pub fn parse_script(tokens: Vec<Token>) -> (Module, Vec<Diag>) {
 }
 
 fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
-    let mut p = Parser { toks: tokens, i: 0, diags: Vec::new() };
+    let mut p = Parser { trait_head: false, toks: tokens, i: 0, diags: Vec::new() };
     let mut m = Module::default();
     let mut top = Vec::new();
     while !p.at(&Tok::Eof) {
@@ -29,6 +29,7 @@ fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
             Tok::Struct => p.struct_decl().map(|s| m.structs.push(s)),
             Tok::Enum => p.enum_decl().map(|e| m.enums.push(e)),
             Tok::Use => p.use_decl().map(|u| m.uses.push(u)),
+            Tok::Ident(n) if n == "trait" => p.trait_decl().map(|t| m.traits.push(t)),
             Tok::Ident(n) if n == "import" => p.import_decl().map(|c| m.c_imports.push(c)),
             Tok::Ident(n) if n == "test" && matches!(p.peek_at(1), Tok::Str(_)) => p.test_decl(m.tests.len()).map(|(t, f)| {
                 m.tests.push(t);
@@ -40,7 +41,7 @@ fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
             _ if script => p.stmt().map(|s| top.push(s)),
             _ => {
                 let d = Diag::new(p.span(), "auf oberster Ebene sind nur Funktionen, Typen, Variablen und `use` erlaubt").tip("packe den Code in `fn main()` – oder schreibe ein Skript (.vts)");
-                while !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use | Tok::Let | Tok::Var | Tok::Eof) && !matches!(p.peek(), Tok::Ident(n) if n == "import" || n == "test") {
+                while !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use | Tok::Let | Tok::Var | Tok::Eof) && !matches!(p.peek(), Tok::Ident(n) if n == "import" || n == "test" || n == "trait") {
                     p.i += 1;
                 }
                 Err(d)
@@ -61,12 +62,14 @@ fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
             p.diags.push(Diag::new(f.span, "ein Skript braucht kein `fn main()`").tip("schreibe den Code direkt auf die oberste Ebene"));
         }
         let span = Span { line: 1, col: 1, len: 1 };
-        m.fns.push(FnDecl { name: "main".into(), generics: Vec::new(), span, this: None, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body: top, key: String::new() });
+        m.fns.push(FnDecl { name: "main".into(), generics: Vec::new(), bounds: Vec::new(), span, this: None, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body: top, key: String::new() });
     }
     (m, p.diags)
 }
 
 struct Parser {
+    /// Gerade ein Trait-Kopf (Methode ohne Rumpf)?
+    trait_head: bool,
     toks: Vec<Token>,
     i: usize,
     diags: Vec<Diag>,
@@ -213,6 +216,30 @@ impl Parser {
         }
     }
 
+    /// `trait Name` + eingerückt `fn methode(self, …) -> Typ` (nur Köpfe).
+    fn trait_decl(&mut self) -> R<TraitDecl> {
+        self.i += 1;
+        let (name, span) = self.ident("einen Namen für das Trait")?;
+        self.expect(Tok::Newline)?;
+        if !self.eat(&Tok::Indent) {
+            return Err(Diag::new(self.span(), "hier fehlt ein eingerückter Block").tip("z. B. `    fn zeichne(self)`"));
+        }
+        let mut methods = Vec::new();
+        self.trait_head = true;
+        while !self.at(&Tok::Dedent) && !self.at(&Tok::Eof) {
+            match self.fn_decl(true) {
+                Ok(f) => methods.push(f),
+                Err(d) => {
+                    self.diags.push(d);
+                    self.sync();
+                }
+            }
+        }
+        self.trait_head = false;
+        self.eat(&Tok::Dedent);
+        Ok(TraitDecl { name, span, methods })
+    }
+
     /// `test "name"` + Block: wird zur Funktion `__test_N` ohne Parameter; `volt test` startet jede einzeln.
     fn test_decl(&mut self, n: usize) -> R<((String, String), FnDecl)> {
         let span = self.span();
@@ -227,7 +254,7 @@ impl Parser {
         };
         let body = self.block()?;
         let fname = format!("__test_{n}");
-        Ok(((name, fname.clone()), FnDecl { name: fname, generics: Vec::new(), span, this: None, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body, key: String::new() }))
+        Ok(((name, fname.clone()), FnDecl { name: fname, generics: Vec::new(), bounds: Vec::new(), span, this: None, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body, key: String::new() }))
     }
 
     /// `import c "math.h" as m` (+ `link "m"` für Bibliotheken)
@@ -298,6 +325,7 @@ impl Parser {
 
     fn fn_rest(&mut self, name: String, span: Span, method: bool) -> R<FnDecl> {
         let mut generics = Vec::new();
+        let mut bounds = Vec::new();
         if self.at(&Tok::LBracket) {
             if method {
                 return Err(Diag::new(self.span(), "Methoden können keine Typ-Parameter haben").tip("mach daraus eine freie Funktion: `fn name[T](…)`"));
@@ -307,6 +335,10 @@ impl Parser {
                 let (g, at) = self.ident("einen Namen für den Typ-Parameter (z. B. `T`)")?;
                 if generics.contains(&g) {
                     return Err(Diag::new(at, format!("der Typ-Parameter `{g}` steht doppelt")));
+                }
+                if self.eat(&Tok::Colon) {
+                    let (t, tat) = self.ident("den Namen des Traits")?;
+                    bounds.push((g.clone(), t, tat));
                 }
                 generics.push(g);
                 if !self.eat(&Tok::Comma) {
@@ -344,11 +376,11 @@ impl Parser {
         }
         self.expect(Tok::RParen)?;
         let ret_ref = if self.eat(&Tok::Arrow) { Some(self.type_ref()?) } else { None };
-        let mut body = self.block()?;
+        let mut body = if self.trait_head { self.expect(Tok::Newline)?; Vec::new() } else { self.block()? };
         if ret_ref.is_some() {
             tail_match_returns(&mut body);
         }
-        Ok(FnDecl { name, generics, span, this, params, ret_ref, ret: Type::Unknown, body, key: String::new() })
+        Ok(FnDecl { name, generics, bounds, span, this, params, ret_ref, ret: Type::Unknown, body, key: String::new() })
     }
 
     /// `name: Typ` mit optionalem `= standardwert`.
@@ -819,7 +851,7 @@ impl Parser {
 fn interpolation(mut toks: Vec<Token>) -> R<Expr> {
     let end = toks.last().map(|t| t.span).unwrap_or_default();
     toks.push(Token { tok: Tok::Eof, span: end });
-    let mut p = Parser { toks, i: 0, diags: Vec::new() };
+    let mut p = Parser { trait_head: false, toks, i: 0, diags: Vec::new() };
     match p.expr() {
         Ok(e) if p.at(&Tok::Eof) => Ok(e),
         Ok(_) => Err(Diag::new(p.span(), "in `{…}` darf nur ein einzelner Ausdruck stehen")),

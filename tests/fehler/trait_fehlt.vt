@@ -1,0 +1,11 @@
+trait Flaeche
+    fn flaeche(self) -> f64
+
+struct Punkt
+    x: int
+
+fn zeige[T: Flaeche](x: T)
+    print(x.flaeche())
+
+fn main()
+    zeige(Punkt(1))
