@@ -1,0 +1,10 @@
+struct Zaehler
+    n: int
+
+    fn plus(mut self)
+        self.n += 1
+
+fn main()
+    var z = Zaehler(0)
+    let f = fn() => z.plus()
+    f()

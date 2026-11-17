@@ -168,6 +168,7 @@ fn has_call(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Invoke { .. } | ExprKind::Try(_) | ExprKind::Index(..) | ExprKind::List(_) | ExprKind::Call { .. } => true,
         ExprKind::FnRef(_) => false,
+        ExprKind::Lambda { .. } => true,
         ExprKind::Unary(_, x) | ExprKind::Field(x, _) | ExprKind::Wrap(x) => has_call(x),
         ExprKind::Binary(_, l, r) => has_call(l) || has_call(r),
         ExprKind::Variant { args, .. } => args.iter().any(has_call),
@@ -261,10 +262,12 @@ impl<'a> Gen<'a> {
             Type::Fn(ps, r) => {
                 let name = format!("volt_fn_{}", tm(t));
                 if self.done.insert(name.clone()) {
-                    let params: Vec<String> = ps.iter().map(|p| self.ctype(p)).collect();
-                    let params = if params.is_empty() { "void".to_string() } else { params.join(", ") };
-                    let rt = self.ctype(r);
-                    self.types += &format!("typedef {rt} (*{name})({params});\n");
+                    // Funktionswert = Zeiger auf die Funktion (erster Parameter: Umgebung) + Umgebung (NULL bei benannten Funktionen)
+                    for p in ps {
+                        self.ctype(p);
+                    }
+                    self.ctype(r);
+                    self.types += &format!("typedef struct {{ void* f; void* env; }} {name};\n");
                 }
                 name
             }
@@ -304,6 +307,13 @@ impl<'a> Gen<'a> {
         }
         let union = if cases.is_empty() { String::new() } else { format!(" union {{{cases} }} as;") };
         self.types += &format!("typedef struct {name} {{ int32_t tag;{union} }} {name};\n");
+    }
+
+    /// C-Zeigertyp zum Aufruf eines Funktionswerts: `R (*)(void*, A1, A2)`.
+    fn fn_ptr(&mut self, ps: &[Type], ret: &Type) -> String {
+        let mut params = vec!["void*".to_string()];
+        params.extend(ps.iter().map(|p| self.ctype(p)));
+        format!("{} (*)({})", self.ctype(ret), params.join(", "))
     }
 
     fn owner_type(&self, method_key: &str) -> Type {
@@ -602,7 +612,55 @@ impl<'a> Gen<'a> {
             ExprKind::Float(x) => format!("{x:?}"),
             ExprKind::Bool(b) => b.to_string(),
             ExprKind::None => "0".into(),
-            ExprKind::FnRef(key) => self.externs.get(key).cloned().unwrap_or_else(|| fname(key)),
+            ExprKind::FnRef(key) => {
+                let Type::Fn(ps, ret) = e.ty.clone() else { unreachable!("FnRef hat Funktionstyp") };
+                let fty = self.ctype(&e.ty);
+                let wname = format!("volt_w_{}", mangle(key));
+                if self.done.insert(wname.clone()) {
+                    let callee = self.externs.get(key).cloned().unwrap_or_else(|| fname(key));
+                    let rt = self.ctype(&ret);
+                    let params: String = ps.iter().enumerate().map(|(i, p)| format!(", {} a{i}", self.ctype(p))).collect();
+                    let args = (0..ps.len()).map(|i| format!("a{i}")).collect::<Vec<_>>().join(", ");
+                    let body = if *ret == Type::Void { format!("{callee}({args});") } else { format!("return {callee}({args});") };
+                    self.protos += &format!("static {rt} {wname}(void* env{params}) {{ (void)env; {body} }}\n");
+                }
+                format!("(({fty}){{(void*){wname}, 0}})")
+            }
+            ExprKind::Lambda { params, body, captures, .. } => {
+                let Type::Fn(_, ret) = e.ty.clone() else { unreachable!("Lambda hat Funktionstyp") };
+                self.tmp += 1;
+                let (name, envty) = (format!("volt_lambda{}", self.tmp), format!("volt_env{}", self.tmp));
+                let fty = self.ctype(&e.ty);
+                // Einfangen (in der Umgebung der Funktion, die das Lambda erzeugt)
+                let sets: String = captures.iter().map(|(n, _)| format!("volt_e->v_{n} = {}; ", if n == "self" && self.mut_self { "(*v_self)".to_string() } else { format!("v_{n}") })).collect();
+                let fields: String = captures.iter().map(|(n, t)| format!("{} v_{n}; ", self.ctype(t))).collect();
+                if !captures.is_empty() {
+                    self.types += &format!("typedef struct {{ {fields}}} {envty};\n");
+                }
+                // Funktion des Lambdas: eigener Zustand (kein mut self, keine offenen defers, eigener Rückgabetyp)
+                let (saved_mut, saved_defers, saved_ret) = (self.mut_self, std::mem::take(&mut self.defers), std::mem::replace(&mut self.ret, (*ret).clone()));
+                self.mut_self = false;
+                let code = self.expr(body);
+                (self.mut_self, self.defers, self.ret) = (saved_mut, saved_defers, saved_ret);
+                let rt = self.ctype(&ret);
+                let ps: String = params.iter().map(|p| format!(", {} v_{}", self.ctype(&p.ty), p.name)).collect();
+                let mut def = format!("static {rt} {name}(void* volt_envp{ps}) {{\n");
+                if captures.is_empty() {
+                    def += "    (void)volt_envp;\n";
+                } else {
+                    def += &format!("    {envty}* volt_env = ({envty}*)volt_envp;\n");
+                    for (n, t) in captures {
+                        def += &format!("    {} v_{n} = volt_env->v_{n};\n", self.ctype(t));
+                    }
+                }
+                def += &if *ret == Type::Void { format!("    {code};\n}}\n") } else { format!("    return {code};\n}}\n") };
+                self.protos += &def;
+                if captures.is_empty() {
+                    format!("(({fty}){{(void*){name}, 0}})")
+                } else {
+                    format!("({{ {envty}* volt_e = volt_alloc(0, sizeof *volt_e, 0); {sets}(({fty}){{(void*){name}, volt_e}}); }})")
+                }
+            }
             ExprKind::Ident(name) if name == "self" && self.mut_self => "(*v_self)".into(),
             ExprKind::Ident(name) => format!("v_{name}"),
             ExprKind::Str(segs) => {
@@ -751,8 +809,14 @@ impl<'a> Gen<'a> {
                 self.seq(ops, |v| format!("(({st}){{{}}})", v.join(", ")))
             }
             Target::Indirect => {
+                let Type::Fn(ps, ret) = args[0].ty.clone() else { unreachable!("Aufruf eines Funktionswerts") };
+                let (fty, pty) = (self.ctype(&args[0].ty), self.fn_ptr(&ps, &ret));
+                let t = self.fresh("f");
                 let ops = self.ops(args);
-                self.seq(ops, |v| format!("({})({})", v[0], v[1..].join(", ")))
+                self.seq(ops, |v| {
+                    let rest: String = v[1..].iter().map(|a| format!(", {a}")).collect();
+                    format!("({{ {fty} {t} = {}; (({pty}){t}.f)({t}.env{rest}); }})", v[0])
+                })
             }
             Target::Builtin(name) => self.builtin(e, name, args),
             Target::BuiltinMethod(id) => self.builtin_method(e, id, args, line),

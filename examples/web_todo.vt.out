@@ -1,6 +1,6 @@
 [web] setze_html #app = <h1>Aufgaben ⚡</h1><p><input id='neu' placeholder='Was ist zu tun?' size='28'> <button id='add'>hinzufügen</button></p><p>1 offen</p><ul><li><button id='t0'>●</button> <span style='text-decoration:line-through;opacity:.55'>Volt installieren</span> <button id='d0'>✕</button></li><li><button id='t1'>○</button> <span>Todo-App bauen</span> <button id='d1'>✕</button></li></ul>
-[web] lausche #add click -> 1
-[web] lausche #t0 click -> 1000
-[web] lausche #d0 click -> 2000
-[web] lausche #t1 click -> 1001
-[web] lausche #d1 click -> 2001
+[web] lausche #add click -> 100000
+[web] lausche #t0 click -> 100001
+[web] lausche #d0 click -> 100002
+[web] lausche #t1 click -> 100003
+[web] lausche #d1 click -> 100004

@@ -1,0 +1,43 @@
+# Closures: anonyme Funktionen `fn(x: int) -> int => x * faktor`, die Werte aus ihrer Umgebung mitnehmen (als Kopie).
+use liste
+
+fn mal(faktor: int) -> fn(int) -> int
+    return fn(x: int) -> int => x * faktor
+
+fn zaehler_ab(start: int) -> fn() -> int
+    let wert = start
+    return fn() -> int => wert + 1
+
+struct Konto
+    stand: int
+
+    fn passt(self, grenze: int) -> fn(int) -> bool
+        return fn(betrag: int) => betrag + self.stand >= grenze
+
+fn kombiniere(f: fn(int) -> int, g: fn(int) -> int) -> fn(int) -> int
+    return fn(x: int) -> int => g(f(x))
+
+fn main()
+    let verdreifache = mal(3)
+    print(verdreifache(14))
+    let zahlen = [1, 2, 3, 4, 5]
+    let grenze = 3
+    print(liste.filtere(zahlen, fn(x: int) => x > grenze).len())
+    print(liste.falte(zahlen, 0, fn(acc: int, x: int) => acc + x * grenze))
+    let texte = liste.abbilden(zahlen, fn(x: int) => "Nr. {x}")
+    print(texte.join(" | "))
+    print(zaehler_ab(41)())
+    let k = Konto(50)
+    let genug = k.passt(100)
+    print(genug(60))
+    print(genug(10))
+    let plus1_dann_mal3 = kombiniere(fn(x: int) => x + 1, mal(3))
+    print(plus1_dann_mal3(4))
+    let namen = ["Zoe", "Ali", "Max"]
+    liste.sortiere_mit(namen, fn(a: str, b: str) => a < b)
+    print(namen.join(","))
+    let ops = [mal(2), mal(10), fn(x: int) => x - 1]
+    var v = 5
+    for op in ops
+        v = op(v)
+    print(v)

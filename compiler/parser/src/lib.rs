@@ -859,6 +859,30 @@ impl Parser {
                 self.expect(Tok::RParen)?;
                 return Ok(inner);
             }
+            Tok::Fn => {
+                // Lambda: `fn(a: int, b: int) -> int => a + b` (ohne `->`: Rückgabetyp ergibt sich aus dem Körper)
+                self.i += 1;
+                self.expect(Tok::LParen)?;
+                let mut params = Vec::new();
+                while !self.at(&Tok::RParen) {
+                    let (name, pspan) = self.ident("einen Parameternamen")?;
+                    if !self.eat(&Tok::Colon) {
+                        return Err(Diag::new(pspan, format!("der Parameter `{name}` braucht einen Typ")).tip(format!("schreibe z. B. `{name}: int`")));
+                    }
+                    params.push(Param { name, span: pspan, ty_ref: self.type_ref()?, ty: Type::Unknown });
+                    if !self.eat(&Tok::Comma) {
+                        break;
+                    }
+                }
+                self.expect(Tok::RParen)?;
+                let ret_ref = if self.eat(&Tok::Arrow) { Some(self.type_ref()?) } else { None };
+                if !self.eat(&Tok::FatArrow) {
+                    return Err(self.unexpected("`=>` und den Ausdruck der Funktion").clone()).map_err(|d: Diag| d.tip("z. B. `fn(x: int) -> int => x * 2`"));
+                }
+                let body = self.expr()?;
+                let end = body.span;
+                return Ok(node(ExprKind::Lambda { params, ret_ref, body: Box::new(body), captures: Vec::new() }, join(span, end)));
+            }
             Tok::Bang => return Err(Diag::new(span, "unerwartetes Zeichen `!`").tip("„nicht“ schreibt man in Volt `not`")),
             _ => return Err(self.unexpected("einen Ausdruck")),
         };

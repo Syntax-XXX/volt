@@ -289,6 +289,9 @@ pub enum ExprKind {
     Index(Box<Expr>, Box<Expr>),
     /// `wert?`
     Try(Box<Expr>),
+    /// Anonyme Funktion: `fn(x: int) -> int => x * 2` (Körper = ein Ausdruck). `captures` füllt der Typchecker: Werte aus der
+    /// Umgebung, die als Kopie in die Funktion wandern.
+    Lambda { params: Vec<Param>, ret_ref: Option<TypeRef>, body: Box<Expr>, captures: Vec<(String, Type)> },
     // --- ab hier nur vom Typchecker erzeugt ---
     /// Name einer Funktion als Wert (Schlüssel).
     FnRef(String),
@@ -540,5 +543,6 @@ pub fn dump_expr(e: &Expr) -> String {
         ExprKind::Variant { key, index, args } => format!("(variant {key} {index}{})", list(args.iter().map(dump_expr))),
         ExprKind::Wrap(x) => format!("(wrap {})", dump_expr(x)),
         ExprKind::FnRef(k) => format!("(fnref {k})"),
+        ExprKind::Lambda { params, body, .. } => format!("(fn ({}) {})", params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(" "), dump_expr(body)),
     }
 }

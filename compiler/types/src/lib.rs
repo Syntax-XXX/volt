@@ -2,6 +2,7 @@
 //! Aufrufe, Feldzugriffe und Enum-Fälle werden dabei in aufgelöste Formen umgeschrieben
 //! (`ExprKind::Invoke`, `ExprKind::Variant`), Werte für `T?`/`T!` in `ExprKind::Wrap` verpackt.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use volt_lexer::{Diag, Span};
 use volt_parser::ast::*;
@@ -101,6 +102,9 @@ struct Checker {
     unit: usize,
     /// Sichtbare Variablen, innerster Block zuletzt.
     scopes: Vec<HashMap<String, Var>>,
+    /// Offene Lambdas: Länge von `scopes` beim Betreten (Variablen darunter gehören der Umgebung) und deren bisherige Captures.
+    lambda_bases: Vec<usize>,
+    captures: RefCell<Vec<Vec<(String, Type)>>>,
     /// Variablen auf oberster Ebene je Datei (stehen in jeder Funktion der Datei ganz unten im Gültigkeitsbereich).
     globals: Vec<HashMap<String, Var>>,
     /// Rückgabetyp der Funktion, die gerade geprüft wird.
@@ -136,6 +140,8 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
         unit: 0,
         scopes: Vec::new(),
         globals: vec![HashMap::new(); units.len()],
+        lambda_bases: Vec::new(),
+        captures: RefCell::new(Vec::new()),
         ret: Type::Void,
         loops: 0,
         diags: Vec::new(),
@@ -650,7 +656,26 @@ impl Checker {
     }
 
     fn lookup(&self, name: &str) -> Option<Var> {
-        self.scopes.iter().rev().find_map(|s| s.get(name)).cloned()
+        let i = self.scopes.iter().rposition(|s| s.contains_key(name))?;
+        let v = self.scopes[i][name].clone();
+        // Variable außerhalb eines offenen Lambdas (Ebene 0 = globale Variablen, die sind immer erreichbar) → wird eingefangen
+        if i >= 1 {
+            let mut caps = self.captures.borrow_mut();
+            for (k, base) in self.lambda_bases.iter().enumerate() {
+                if i < *base && !caps[k].iter().any(|c| c.0 == name) {
+                    caps[k].push((name.to_string(), v.ty.clone()));
+                }
+            }
+        }
+        Some(v)
+    }
+
+    /// Liegt die Variable außerhalb des innersten offenen Lambdas (wird also nur als Kopie gesehen)?
+    fn is_captured(&self, name: &str) -> bool {
+        match (self.lambda_bases.last(), self.scopes.iter().rposition(|s| s.contains_key(name))) {
+            (Some(base), Some(i)) => i >= 1 && i < *base,
+            _ => false,
+        }
     }
 
     fn declare(&mut self, name: &str, span: Span, ty: Type, kind: VarKind) {
@@ -1005,6 +1030,10 @@ impl Checker {
         match &e.kind {
             ExprKind::Ident(name) => {
                 let Some(var) = self.lookup(name) else { return };
+                if self.is_captured(name) {
+                    self.err(Diag::new(e.span, format!("`{name}` kommt von außerhalb der Funktion und ist dort nur eine Kopie")).tip("ändern geht über eine globale Variable oder eine Liste"));
+                    return;
+                }
                 let tip = match var.kind {
                     VarKind::Var | VarKind::SelfMut => return,
                     VarKind::Param => format!("Parameter sind fest – kopiere den Wert in eine eigene Variable, z. B. `var wert = {name}`"),
@@ -1663,6 +1692,33 @@ impl Checker {
                 let ExprKind::Call { callee, args } = take(e) else { unreachable!() };
                 let (kind, ty) = self.call(*callee, args, span);
                 e.kind = kind;
+                ty
+            }
+            ExprKind::Lambda { .. } => {
+                let ExprKind::Lambda { mut params, ret_ref, mut body, .. } = take(e) else { unreachable!() };
+                for p in &mut params {
+                    p.ty = self.resolve(&p.ty_ref);
+                }
+                self.lambda_bases.push(self.scopes.len());
+                self.captures.borrow_mut().push(Vec::new());
+                self.scopes.push(HashMap::new());
+                for p in &params {
+                    self.declare(&p.name, p.span, p.ty.clone(), VarKind::Param);
+                }
+                let body_ty = self.expr(&mut body);
+                let ret = match &ret_ref {
+                    Some(r) => {
+                        let want = self.resolve(r);
+                        self.coerce(&mut body, &want, |w, g| format!("die Funktion gibt {w} zurück, der Ausdruck ist aber {g}"));
+                        want
+                    }
+                    None => body_ty,
+                };
+                self.scopes.pop();
+                self.lambda_bases.pop();
+                let captures = self.captures.borrow_mut().pop().unwrap_or_default();
+                let ty = Type::Fn(params.iter().map(|p| p.ty.clone()).collect(), Box::new(ret));
+                e.kind = ExprKind::Lambda { params, ret_ref, body, captures };
                 ty
             }
             ExprKind::GenericNew { .. } => {
