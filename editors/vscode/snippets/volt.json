@@ -1,0 +1,21 @@
+{
+  "Funktion": { "prefix": "fn", "body": ["fn ${1:name}(${2})${3: -> ${4:int}}", "    ${0}"], "description": "Funktion" },
+  "main": { "prefix": "main", "body": ["fn main()", "    ${0}"], "description": "Startfunktion" },
+  "for-Bereich": { "prefix": "for", "body": ["for ${1:i} in 0..${2:n}", "    ${0}"], "description": "Schleife über einen Bereich" },
+  "for-Liste": { "prefix": "forin", "body": ["for ${1:x} in ${2:liste}", "    ${0}"], "description": "Schleife über eine Liste" },
+  "if": { "prefix": "if", "body": ["if ${1:bedingung}", "    ${0}"] },
+  "ifelse": { "prefix": "ifelse", "body": ["if ${1:bedingung}", "    ${2}", "else", "    ${0}"] },
+  "if let": { "prefix": "iflet", "body": ["if let ${1:x} = ${2:wert}", "    ${0}"], "description": "nur wenn ein Wert da ist (T?)" },
+  "let else": { "prefix": "letelse", "body": ["let ${1:x} = ${2:aufruf}() else ${3:err}", "    ${0:return}"], "description": "Fehler/none abfangen" },
+  "while": { "prefix": "while", "body": ["while ${1:bedingung}", "    ${0}"] },
+  "struct": { "prefix": "struct", "body": ["struct ${1:Name}", "    ${2:feld}: ${3:int}", "", "    fn ${4:methode}(self)", "        ${0}"], "description": "Struct mit Methode" },
+  "enum": { "prefix": "enum", "body": ["enum ${1:Name}", "    ${2:Fall}(${3:wert}: ${4:int})", "    ${0:Anderer}"], "description": "Enum mit Daten" },
+  "match": { "prefix": "match", "body": ["match ${1:wert}", "    ${2:Fall}(${3:x}) => ${4}", "    _ => ${0}"] },
+  "test": { "prefix": "test", "body": ["test \"${1:name}\"", "    assert(${0})"], "description": "Testblock (volt test)" },
+  "generische Funktion": { "prefix": "fng", "body": ["fn ${1:name}[${2:T}](${3:a}: ${2:T}) -> ${2:T}", "    ${0}"] },
+  "Trait": { "prefix": "trait", "body": ["trait ${1:Name}", "    fn ${2:methode}(self) -> ${3:int}"] },
+  "defer": { "prefix": "defer", "body": "defer ${0:aufraeumen()}" },
+  "use": { "prefix": "use", "body": "use ${1|liste,text,mathe,zeit,web|}" },
+  "import c": { "prefix": "importc", "body": "import c \"${1:math.h}\" as ${2:m}" },
+  "Web-Ereignis": { "prefix": "webapp", "body": ["use web", "", "var zaehler = 0", "", "fn ereignis(id: int)", "    zaehler += 1", "    web.setze_text(\"#zahl\", \"{zaehler}\")", "", "fn main()", "    web.setze_html(\"#app\", \"<p id='zahl'>0</p><button id='knopf'>+1</button>\")", "    web.lausche(\"#knopf\", \"click\", 1)"], "description": "Web-App-Gerüst" }
+}

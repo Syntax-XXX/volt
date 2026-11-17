@@ -1,0 +1,34 @@
+{
+  "name": "volt-lang",
+  "displayName": "Volt",
+  "description": "Volt-Programmiersprache: Syntaxfarben, Fehler beim Tippen, Vervollständigung, Hover, Snippets, Formatieren, Ausführen und Testen",
+  "version": "0.1.0",
+  "publisher": "volt-lang",
+  "license": "MIT",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Programming Languages", "Snippets", "Formatters"],
+  "keywords": ["volt", "vt", "vts"],
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:volt"],
+  "contributes": {
+    "languages": [{ "id": "volt", "aliases": ["Volt", "volt"], "extensions": [".vt", ".vts"], "configuration": "./language-configuration.json" }],
+    "grammars": [{ "language": "volt", "scopeName": "source.volt", "path": "./syntaxes/volt.tmLanguage.json" }],
+    "snippets": [{ "language": "volt", "path": "./snippets/volt.json" }],
+    "commands": [
+      { "command": "volt.run", "title": "Volt: Datei ausführen" },
+      { "command": "volt.test", "title": "Volt: Tests ausführen" },
+      { "command": "volt.serve", "title": "Volt: Web-Seite starten (volt serve)" },
+      { "command": "volt.restart", "title": "Volt: Language-Server neu starten" }
+    ],
+    "menus": { "editor/title/run": [{ "command": "volt.run", "when": "resourceLangId == volt", "group": "navigation" }] },
+    "configuration": {
+      "title": "Volt",
+      "properties": {
+        "volt.pfad": { "type": "string", "default": "volt", "description": "Pfad zum Programm `volt` (Compiler, Language-Server, Formatierer)." }
+      }
+    }
+  },
+  "scripts": { "package": "vsce package" },
+  "dependencies": { "vscode-languageclient": "^9.0.1" },
+  "devDependencies": { "@vscode/vsce": "^3.0.0" }
+}

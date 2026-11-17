@@ -26,6 +26,10 @@ print("Summe = {summe}")
 
 `volt build x.vt --target web` baut aus einem Volt-Programm eine fertige Seite (WebAssembly + `index.html`), `volt serve x.vt` liefert sie aus und lädt bei jeder Änderung neu. `use web` verbindet das Programm mit der Seite (`examples/web_zaehler.vt`, `examples/web_todo.vt` – beide im echten Browser getestet). Braucht clang mit WebAssembly-Unterstützung. Noch offen: Komponenten-Syntax mit HTML-Vorlagen (braucht Funktionswerte).
 
+## Editor
+
+`editors/vscode/`: VS-Code-Addon (Syntaxfarben, Fehler beim Tippen, Vervollständigung, Hover, Snippets, Formatieren, Befehle zum Ausführen/Testen). Bauen: `cd editors/vscode && npm install && python3 package-vsix.py`, installieren: `code --install-extension volt-lang-0.1.0.vsix`.
+
 ## Werkzeuge
 
 `volt lsp` ist ein Language-Server (Fehler beim Tippen, Vervollständigung, Hover) für Editoren.

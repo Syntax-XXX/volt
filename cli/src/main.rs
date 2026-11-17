@@ -341,6 +341,13 @@ fn run_tests(path: &Path) -> Result<u8, ()> {
 /// mehrere Leerzeilen zu einer, genau ein Zeilenumbruch am Ende. Kommentare und Text bleiben unangetastet.
 /// Mit `--check` wird nichts geschrieben; Exit 1, wenn eine Datei sich ändern würde.
 fn fmt(args: &[String]) -> Result<u8, ()> {
+    if args.iter().any(|a| a == "--stdin") {
+        // für Editoren: Text von stdin formatiert nach stdout
+        let mut src = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut src).map_err(|e| eprintln!("error: stdin: {e}"))?;
+        print!("{}", format_source(&src));
+        return Ok(0);
+    }
     let check = args.iter().any(|a| a == "--check");
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
     if files.is_empty() {
