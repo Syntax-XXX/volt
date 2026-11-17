@@ -1,0 +1,30 @@
+# Komponenten ohne neue Syntax: `ansicht` liefert HTML aus dem Zustand, `web.knopf` meldet Behandler an, nach jedem Klick wird neu
+# gezeichnet. Bauen: volt build examples/web_komponente.vt --target web   ·   Entwickeln: volt serve examples/web_komponente.vt
+use web
+
+var zaehler = 0
+var aufgaben = List[str]()
+
+fn erhoehen()
+    zaehler += 1
+
+fn verringern()
+    zaehler -= 1
+
+fn hinzufuegen()
+    let text = web.wert("#neu").trim()
+    if text.len() > 0
+        aufgaben.push(text)
+
+fn entfernen(i: int)
+    aufgaben.remove(i)
+
+fn ansicht() -> str
+    var liste = ""
+    for i in 0..aufgaben.len()
+        liste = "{liste}<li>{web.sicher(aufgaben[i])} {web.knopf("✕", fn() => entfernen(i))}</li>"
+    return "<h1>Komponente ⚡</h1><p style='font-size:2rem'>{zaehler}</p><p>{web.knopf("+1", erhoehen)} {web.knopf("−1", verringern)}</p><p><input id='neu' placeholder='Aufgabe'> {web.knopf("hinzufügen", hinzufuegen)}</p><ul>{liste}</ul>"
+
+fn main()
+    aufgaben.push("Volt lernen")
+    web.zeichne("#app", ansicht)

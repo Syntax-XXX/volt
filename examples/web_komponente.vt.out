@@ -1,0 +1,5 @@
+[web] setze_html #app = <h1>Komponente ⚡</h1><p style='font-size:2rem'>0</p><p><button data-volt='1'>+1</button> <button data-volt='2'>−1</button></p><p><input id='neu' placeholder='Aufgabe'> <button data-volt='3'>hinzufügen</button></p><ul><li>Volt lernen <button data-volt='0'>✕</button></li></ul>
+[web] lausche #app [data-volt='0'] click -> 200000
+[web] lausche #app [data-volt='1'] click -> 200001
+[web] lausche #app [data-volt='2'] click -> 200002
+[web] lausche #app [data-volt='3'] click -> 200003

@@ -29,9 +29,42 @@ fn registriere(aktion: fn()) -> int
     behandler.push(aktion)
     return 100000 + behandler.len() - 1
 
+# Komponenten: eine Ansicht ist eine Funktion, die HTML liefert. `web.zeichne("#app", ansicht)` zeigt sie; Knöpfe darin kommen von
+# `web.knopf(text, aktion)` und melden ihren Behandler selbst an. Nach jedem Klick wird die Ansicht neu gezeichnet – der Zustand liegt
+# in Variablen auf oberster Ebene, die Ansicht liest ihn nur. (Eingabefelder werden dabei neu angelegt: Text vorher mit `web.wert` lesen.)
+var ansicht_behandler = List[fn()]()
+var aktuelle_ansicht = leere_ansicht
+var aktueller_selektor = "#app"
+
+fn leere_ansicht() -> str
+    return ""
+
+fn knopf(beschriftung: str, aktion: fn()) -> str
+    let nr = ansicht_behandler.len()
+    ansicht_behandler.push(aktion)
+    return "<button data-volt='{nr}'>{sicher(beschriftung)}</button>"
+
+fn zeichne(selektor: str, ansicht: fn() -> str)
+    aktueller_selektor = selektor
+    aktuelle_ansicht = ansicht
+    aktualisieren()
+
+# Ansicht neu zeichnen (passiert nach jedem `knopf`-Klick von selbst; für Timer und eigene Ereignisse selbst aufrufen).
+fn aktualisieren()
+    ansicht_behandler.clear()
+    let html = aktuelle_ansicht()
+    w.volt_set_html(aktueller_selektor, html)
+    for i in 0..ansicht_behandler.len()
+        w.volt_listen("{aktueller_selektor} [data-volt='{i}']", "click", 200000 + i)
+
 # Vom Browser aufgerufen (id ab 100000).
 fn fuehre_aus(id: int)
-    behandler[id - 100000]()
+    if id >= 200000
+        let aktion = ansicht_behandler[id - 200000]
+        aktion()
+        aktualisieren()
+    else
+        behandler[id - 100000]()
 
 fn bei(selektor: str, ereignis: str, aktion: fn())
     w.volt_listen(selektor, ereignis, registriere(aktion))
