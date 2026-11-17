@@ -85,3 +85,54 @@ fn build_cache_baut_unveraenderte_programme_nicht_neu() {
     assert!(fs::metadata(&bin).unwrap().modified().unwrap() > first);
     fs::remove_dir_all(&dir).ok();
 }
+
+fn volt(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_volt")).args(args).output().unwrap()
+}
+
+#[test]
+fn volt_test_fuehrt_tests_einzeln_aus() {
+    let dir = std::env::temp_dir().join(format!("volt-test-cmd-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("t.vt");
+    fs::write(&file, "test \"gut\"\n    assert(1 + 1 == 2)\n\ntest \"schlecht\"\n    assert(1 + 1 == 3)\n\ntest \"gut2\"\n    assert(true)\n").unwrap();
+    let out = volt(&["test", file.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("ok       gut") && text.contains("FEHLER   schlecht: Prüfung fehlgeschlagen (Zeile 5)") && text.contains("ok       gut2"), "{text}");
+    assert!(text.contains("2 bestanden, 1 fehlgeschlagen"));
+    assert_eq!(out.status.code(), Some(1));
+    fs::write(&file, "test \"nur gut\"\n    assert(true)\n").unwrap();
+    assert_eq!(volt(&["test", file.to_str().unwrap()]).status.code(), Some(0));
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn volt_fmt_und_check() {
+    let dir = std::env::temp_dir().join(format!("volt-fmt-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("f.vt");
+    fs::write(&file, "fn main()  \n\tprint(\"a  \")   \n\n\n\n    # Kommentar  \n").unwrap();
+    assert_eq!(volt(&["fmt", "--check", file.to_str().unwrap()]).status.code(), Some(1));
+    assert!(volt(&["fmt", file.to_str().unwrap()]).status.success());
+    assert_eq!(fs::read_to_string(&file).unwrap(), "fn main()\n    print(\"a  \")\n\n    # Kommentar\n", "Text in Strings muss bleiben");
+    assert_eq!(volt(&["fmt", "--check", file.to_str().unwrap()]).status.code(), Some(0));
+    assert!(volt(&["check", file.to_str().unwrap()]).status.success());
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn volt_new_legt_lauffaehige_projekte_an() {
+    let dir = std::env::temp_dir().join(format!("volt-new-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    for template in ["cli", "game", "lib"] {
+        let proj = dir.join(template);
+        assert!(volt(&["new", proj.to_str().unwrap(), "--template", template]).status.success(), "{template}");
+        let main = proj.join("main.vt");
+        assert!(volt(&["check", main.to_str().unwrap()]).status.success(), "{template} besteht die Prüfung nicht");
+    }
+    let lib_test = volt(&["test", dir.join("lib/mathe.vt").to_str().unwrap()]);
+    assert!(lib_test.status.success(), "{}", String::from_utf8_lossy(&lib_test.stdout));
+    assert!(!volt(&["new", dir.join("cli").to_str().unwrap()]).status.success(), "vorhandener Ordner darf nicht überschrieben werden");
+    assert!(!volt(&["new", dir.join("x").to_str().unwrap(), "--template", "gibtsnicht"]).status.success());
+    fs::remove_dir_all(&dir).ok();
+}

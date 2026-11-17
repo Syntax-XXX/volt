@@ -30,12 +30,16 @@ fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
             Tok::Enum => p.enum_decl().map(|e| m.enums.push(e)),
             Tok::Use => p.use_decl().map(|u| m.uses.push(u)),
             Tok::Ident(n) if n == "import" => p.import_decl().map(|c| m.c_imports.push(c)),
+            Tok::Ident(n) if n == "test" && matches!(p.peek_at(1), Tok::Str(_)) => p.test_decl(m.tests.len()).map(|(t, f)| {
+                m.tests.push(t);
+                m.fns.push(f);
+            }),
             Tok::Dedent => Ok(()), // bleibt nur nach einem schon gemeldeten Fehler übrig
             Tok::Indent => Err(Diag::new(p.span(), "unerwartete Einrückung").tip("Funktionen beginnen ganz links, ohne Leerzeichen davor")),
             _ if script => p.stmt().map(|s| top.push(s)),
             _ => {
                 let d = Diag::new(p.span(), "auf oberster Ebene sind nur Funktionen, Typen und `use` erlaubt").tip("packe den Code in `fn main()` – oder schreibe ein Skript (.vts)");
-                while !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use | Tok::Eof) && !matches!(p.peek(), Tok::Ident(n) if n == "import") {
+                while !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use | Tok::Eof) && !matches!(p.peek(), Tok::Ident(n) if n == "import" || n == "test") {
                     p.i += 1;
                 }
                 Err(d)
@@ -184,6 +188,23 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// `test "name"` + Block: wird zur Funktion `__test_N` ohne Parameter; `volt test` startet jede einzeln.
+    fn test_decl(&mut self, n: usize) -> R<((String, String), FnDecl)> {
+        let span = self.span();
+        self.i += 1;
+        let name = match self.peek().clone() {
+            Tok::Str(parts) if matches!(parts.as_slice(), [StrPart::Lit(_)]) => {
+                self.i += 1;
+                let [StrPart::Lit(t)] = parts.as_slice() else { unreachable!() };
+                t.clone()
+            }
+            _ => return Err(self.unexpected("den Namen des Tests als String, z. B. `test \"addieren\"`")),
+        };
+        let body = self.block()?;
+        let fname = format!("__test_{n}");
+        Ok(((name, fname.clone()), FnDecl { name: fname, span, this: None, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body, key: String::new() }))
     }
 
     /// `import c "math.h" as m` (+ `link "m"` für Bibliotheken)

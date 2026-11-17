@@ -15,6 +15,10 @@ volt – die Programmiersprache Volt ⚡
 
   volt run <datei.vt> [--watch]                   kompilieren und starten; mit --watch bei jeder Änderung neu (Strg+C beendet)
   volt build <datei.vt> [--release] [-o <ziel>]   Programm bauen
+  volt check <datei.vt>                           nur prüfen (Syntax und Typen), nichts bauen
+  volt test <datei.vt>                            alle test-Blöcke ausführen
+  volt fmt [--check] <datei…>                     Leerraum aufräumen (Leerzeichen am Zeilenende, Leerzeilen)
+  volt new <name> [--template cli|game|lib]       neues Projekt anlegen
   volt parse <datei.vt> [--ast]                   Syntax prüfen, mit --ast den Syntaxbaum zeigen
   volt <skript.vts>                               Volt Script direkt starten (auch per `#!/usr/bin/env volt`)
 
@@ -36,7 +40,14 @@ fn main() -> ExitCode {
             let default = PathBuf::from(file.file_stem().unwrap_or_default());
             compile(file, flag("--release"), Some(out.unwrap_or(default))).map(|_| 0)
         }
-        (Some("parse"), Some(file)) => frontend(file, false).map(|units| {
+        (Some("check"), Some(file)) => frontend(file, true, false).map(|_| {
+            println!("ok – keine Fehler");
+            0
+        }),
+        (Some("test"), Some(file)) => run_tests(file),
+        (Some("fmt"), _) => fmt(&args[1..]),
+        (Some("new"), Some(name)) => new_project(&name.to_string_lossy(), args.iter().position(|a| a == "--template").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("cli")),
+        (Some("parse"), Some(file)) => frontend(file, false, false).map(|units| {
             print!("{}", if flag("--ast") { dump(&units[0].module) } else { "Syntax ok\n".to_string() });
             0
         }),
@@ -83,7 +94,7 @@ fn lex_parse(src: &str, script: bool) -> (Module, Vec<volt_lexer::Diag>) {
 }
 
 /// Datei samt aller `use`-Module lesen, lexen, parsen und (für run/build) Typen prüfen. Fehler werden hier ausgegeben.
-fn frontend(path: &Path, check: bool) -> Result<Vec<Unit>, ()> {
+fn frontend(path: &Path, check: bool, tests: bool) -> Result<Vec<Unit>, ()> {
     let script = match path.extension().and_then(|e| e.to_str()) {
         Some("vt") => false,
         Some("vts") => true,
@@ -94,7 +105,11 @@ fn frontend(path: &Path, check: bool) -> Result<Vec<Unit>, ()> {
     };
     let src = fs::read_to_string(path).map_err(|e| eprintln!("error: `{}` lässt sich nicht lesen: {e}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new(""));
-    let (module, d) = lex_parse(&src, script);
+    let (mut module, d) = lex_parse(&src, script);
+    // `volt test` braucht kein `main`: ein leeres reicht für die Prüfung des Programms
+    if tests && !module.fns.iter().any(|f| f.name == "main") {
+        module.fns.extend(lex_parse("fn main()\n    return\n", false).0.fns);
+    }
     let mut units = vec![Unit { name: String::new(), module }];
     let mut sources = vec![Source { file: path.display().to_string(), src }];
     let mut diags: Vec<(usize, volt_lexer::Diag)> = d.into_iter().map(|d| (0, d)).collect();
@@ -145,17 +160,25 @@ fn frontend(path: &Path, check: bool) -> Result<Vec<Unit>, ()> {
 
 /// Volt → C → Programm. Ohne `out` landet das Programm im Cache neben der Quelldatei.
 fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, ()> {
-    let units = frontend(path, true)?;
+    compile_mode(path, release, out, false).map(|(bin, _)| bin)
+}
+
+/// Mit `tests`: das Programm führt `test "…"`-Blöcke nach Nummer aus (siehe `volt test`); gibt die Testnamen mit zurück.
+fn compile_mode(path: &Path, release: bool, out: Option<PathBuf>, tests: bool) -> Result<(PathBuf, Vec<String>), ()> {
+    let units = frontend(path, true, tests)?;
+    let names = volt_codegen_c::test_names(&units.iter().map(|u| &u.module).collect::<Vec<_>>());
     let cache = path.parent().unwrap_or(Path::new("")).join(".volt-cache");
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let c_file = cache.join(format!("{stem}.c"));
-    let bin = out.unwrap_or_else(|| cache.join(&*stem));
+    let base = if tests { format!("{stem}.test") } else { stem.to_string() };
+    let c_file = cache.join(format!("{base}.c"));
+    let bin = out.unwrap_or_else(|| cache.join(&base));
     // `volt build prog` (Quelldatei ohne Endung) würde sonst die Quelldatei überschreiben.
     if fs::canonicalize(&bin).ok() == fs::canonicalize(path).ok() {
         eprintln!("error: das Ziel `{}` ist die Quelldatei selbst\n     = tipp: gib mit `-o <name>` ein anderes Ziel an", bin.display());
         return Err(());
     }
-    let c_code = volt_codegen_c::emit_program(&units.iter().map(|u| &u.module).collect::<Vec<_>>());
+    let mods: Vec<&Module> = units.iter().map(|u| &u.module).collect();
+    let c_code = if tests { volt_codegen_c::emit_tests(&mods) } else { volt_codegen_c::emit_program(&mods) };
     fs::create_dir_all(&cache)
         .and_then(|_| fs::write(&c_file, &c_code))
         .map_err(|e| eprintln!("error: `{}` lässt sich nicht schreiben: {e}", c_file.display()))?;
@@ -163,9 +186,9 @@ fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, 
     // Build-Cache: derselbe C-Code (enthält die Runtime) + dieselben Compiler-Einstellungen + dasselbe Ziel → Programm ist schon da.
     let chosen = env::var("VOLT_CC").ok();
     let key = format!("{:016x} {} {} {}", fnv1a(&[c_code.as_bytes(), chosen.as_deref().unwrap_or("").as_bytes(), &[release as u8], env!("CARGO_PKG_VERSION").as_bytes()]), release, chosen.as_deref().unwrap_or("-"), bin.display());
-    let key_file = cache.join(format!("{stem}.key"));
+    let key_file = cache.join(format!("{base}.key"));
     if bin.exists() && fs::read_to_string(&key_file).is_ok_and(|k| k == key) {
-        return Ok(bin);
+        return Ok((bin, names));
     }
 
     let candidates: Vec<&str> = match &chosen {
@@ -193,7 +216,7 @@ fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, 
             Ok(done) if done.status.success() => {
                 // Schlüssel erst nach erfolgreichem Bauen schreiben (kaputte Builds gelten nie als „aktuell“).
                 let _ = fs::write(&key_file, &key);
-                return Ok(bin);
+                return Ok((bin, names));
             }
             Ok(done) => eprintln!(
                 "interner Fehler: `{cc}` nimmt den erzeugten C-Code nicht an – das ist ein Fehler in Volt, nicht in deinem Programm.\nC-Datei: {}\n{}",
@@ -237,6 +260,107 @@ fn watch(path: &Path) -> Result<u8, ()> {
         }
         eprintln!("[watch] Änderung erkannt – neu bauen");
     }
+}
+
+/// `volt test`: jeder Test läuft als eigener Prozess (ein Abbruch in einem Test beendet nicht die anderen).
+fn run_tests(path: &Path) -> Result<u8, ()> {
+    let (bin, names) = compile_mode(path, false, None, true)?;
+    if names.is_empty() {
+        eprintln!("keine Tests gefunden\n     = tipp: schreibe `test \"name\"` und darunter eingerückt den Test, mit `assert(bedingung)`");
+        return Err(());
+    }
+    let mut failed = 0;
+    for (i, name) in names.iter().enumerate() {
+        let out = Command::new(&bin).arg(i.to_string()).output().map_err(|e| eprintln!("error: `{}` lässt sich nicht starten: {e}", bin.display()))?;
+        if out.status.success() {
+            println!("ok       {name}");
+        } else {
+            failed += 1;
+            let why = String::from_utf8_lossy(&out.stderr);
+            println!("FEHLER   {name}: {}", why.lines().next().unwrap_or("Abbruch").trim_start_matches("panic: "));
+        }
+    }
+    println!("\n{} bestanden, {failed} fehlgeschlagen", names.len() - failed);
+    Ok(if failed == 0 { 0 } else { 1 })
+}
+
+/// `volt fmt`: ein Stil, keine Optionen – Leerzeichen am Zeilenende weg, Tabs am Zeilenanfang zu 4 Leerzeichen,
+/// mehrere Leerzeilen zu einer, genau ein Zeilenumbruch am Ende. Kommentare und Text bleiben unangetastet.
+/// Mit `--check` wird nichts geschrieben; Exit 1, wenn eine Datei sich ändern würde.
+fn fmt(args: &[String]) -> Result<u8, ()> {
+    let check = args.iter().any(|a| a == "--check");
+    let files: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    if files.is_empty() {
+        eprintln!("error: welche Datei?\n     = tipp: `volt fmt datei.vt`");
+        return Err(());
+    }
+    let mut dirty = 0;
+    for f in files {
+        let src = fs::read_to_string(f).map_err(|e| eprintln!("error: `{f}` lässt sich nicht lesen: {e}"))?;
+        let formatted = format_source(&src);
+        if formatted != src {
+            dirty += 1;
+            if check {
+                println!("würde ändern: {f}");
+            } else {
+                fs::write(f, &formatted).map_err(|e| eprintln!("error: `{f}` lässt sich nicht schreiben: {e}"))?;
+                println!("formatiert: {f}");
+            }
+        }
+    }
+    Ok(if check && dirty > 0 { 1 } else { 0 })
+}
+
+fn format_source(src: &str) -> String {
+    let mut out = String::new();
+    let mut blank = 0;
+    for line in src.replace("\r\n", "\n").lines() {
+        let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+        let (indent, rest) = line.split_at(indent_len);
+        let rest = rest.trim_end();
+        if rest.is_empty() {
+            blank += 1;
+            continue;
+        }
+        if blank > 0 && !out.is_empty() {
+            out.push('\n');
+        }
+        blank = 0;
+        out += &indent.replace('\t', "    ");
+        out += rest;
+        out.push('\n');
+    }
+    out
+}
+
+const TEMPLATE_GAME: &str = include_str!("../../examples/snake.vt");
+
+/// `volt new name --template cli|game|lib`: Ordner mit lauffähigem Startpunkt anlegen.
+fn new_project(name: &str, template: &str) -> Result<u8, ()> {
+    let dir = Path::new(name);
+    if dir.exists() {
+        eprintln!("error: `{name}` gibt es schon\n     = tipp: nimm einen anderen Namen oder lösche den Ordner");
+        return Err(());
+    }
+    let files: Vec<(&str, String)> = match template {
+        "cli" => vec![("main.vt", format!("# {name} – ein Programm für die Kommandozeile.\nfn main()\n    print(\"Wie heißt du?\")\n    let name = input(\"> \") else\n        return\n    print(\"Hallo, {{name.trim()}}! ⚡\")\n"))],
+        "game" => vec![("main.vt", TEMPLATE_GAME.to_string())],
+        "lib" => vec![
+            ("main.vt", format!("# {name} – eine Bibliothek mit Beispiel. `volt test mathe.vt` führt die Tests aus.\nuse mathe\n\nfn main()\n    print(mathe.quadrat(7))\n")),
+            ("mathe.vt", "fn quadrat(n: int) -> int\n    return n * n\n\ntest \"quadrat\"\n    assert(quadrat(3) == 9)\n    assert(quadrat(-4) == 16)\n".to_string()),
+        ],
+        other => {
+            eprintln!("error: die Vorlage `{other}` gibt es nicht\n     = tipp: cli, game oder lib");
+            return Err(());
+        }
+    };
+    fs::create_dir_all(dir).map_err(|e| eprintln!("error: `{name}` lässt sich nicht anlegen: {e}"))?;
+    let readme = format!("# {name}\n\n```sh\nvolt run main.vt\n```\n");
+    for (file, content) in files.iter().map(|(f, c)| (*f, c.clone())).chain([("README.md", readme), (".gitignore", ".volt-cache/\n".to_string())]) {
+        fs::write(dir.join(file), content).map_err(|e| eprintln!("error: `{file}` lässt sich nicht schreiben: {e}"))?;
+    }
+    println!("angelegt: {name}/ ({template})\n  cd {name} && volt run main.vt");
+    Ok(0)
 }
 
 fn run(path: &Path) -> Result<u8, ()> {

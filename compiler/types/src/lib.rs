@@ -49,7 +49,7 @@ struct Var {
 }
 
 /// Eingebaute Funktionen – diese Namen sind für eigene Funktionen tabu.
-const BUILTINS: &[&str] = &["print", "input", "error", "int", "float", "sqrt", "abs", "exit", "sin", "cos", "tan", "exp", "log", "floor", "ceil", "pow", "atan2", "min", "max"];
+const BUILTINS: &[&str] = &["print", "input", "error", "int", "float", "sqrt", "abs", "exit", "sin", "cos", "tan", "exp", "log", "floor", "ceil", "pow", "atan2", "min", "max", "assert"];
 const TYPE_NAMES: &[&str] = &["int", "f64", "bool", "str", "List", "Map"];
 
 /// Wozu ein Name wie `modul.Typ.Fall` gehört.
@@ -989,6 +989,7 @@ impl Checker {
             "float" => (vec![Int], F64),
             "sqrt" => (vec![F64], F64),
             "exit" => (vec![Int], Void),
+            "assert" => (vec![Bool], Void),
             "sin" | "cos" | "tan" | "exp" | "log" | "floor" | "ceil" => (vec![F64], F64),
             "pow" | "atan2" => (vec![F64, F64], F64),
             "min" | "max" => {

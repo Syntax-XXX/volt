@@ -18,6 +18,20 @@ pub fn emit(m: &Module) -> String {
 
 /// Hauptprogramm (`mods[0]`, enthält `main`) samt Modulen. Erwartet einen fehlerfrei geprüften AST.
 pub fn emit_program(mods: &[&Module]) -> String {
+    emit_with(mods, false)
+}
+
+/// Namen aller `test "…"`-Blöcke in Aufruf-Reihenfolge (so, wie `emit_tests` sie nummeriert).
+pub fn test_names(mods: &[&Module]) -> Vec<String> {
+    mods.iter().flat_map(|m| m.tests.iter().map(|t| t.0.clone())).collect()
+}
+
+/// Wie `emit_program`, aber `main` führt den Test aus, dessen Nummer als erstes Argument kommt (Exit 2 bei unbekannter Nummer).
+pub fn emit_tests(mods: &[&Module]) -> String {
+    emit_with(mods, true)
+}
+
+fn emit_with(mods: &[&Module], tests: bool) -> String {
     let mut g = Gen { types: String::new(), protos: String::new(), body: String::new(), done: HashSet::new(), structs: HashMap::new(), enums: HashMap::new(), tmp: 0, mut_self: false, ret: Type::Void, defers: Vec::new(), loops: Vec::new(), externs: HashMap::new() };
     for m in mods {
         for ci in &m.c_imports {
@@ -41,10 +55,14 @@ pub fn emit_program(mods: &[&Module]) -> String {
         g.function(f);
     }
     let main_ret = mods[0].fns.iter().find(|f| f.name == "main").map(|f| f.ret.clone()).unwrap_or(Type::Void);
-    let main = if is_res_void(&main_ret) {
-        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    volt_res_void r = v_main();\n    if (!r.ok) {\n        fflush(stdout);\n        fprintf(stderr, \"error: %s\\n\", r.err);\n        return 1;\n    }\n    return 0;\n}\n"
+    let test_keys: Vec<String> = mods.iter().flat_map(|m| m.tests.iter().filter_map(|t| m.fns.iter().find(|f| f.name == t.1).map(|f| fname(&f.key)))).collect();
+    let main = if tests {
+        let cases: String = test_keys.iter().enumerate().map(|(i, k)| format!("        case {i}: {k}(); break;\n")).collect();
+        format!("\nint main(int argc, char** argv) {{\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    switch (argc > 1 ? atoi(argv[1]) : -1) {{\n{cases}        default: return 2;\n    }}\n    return 0;\n}}\n")
+    } else if is_res_void(&main_ret) {
+        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    volt_res_void r = v_main();\n    if (!r.ok) {\n        fflush(stdout);\n        fprintf(stderr, \"error: %s\\n\", r.err);\n        return 1;\n    }\n    return 0;\n}\n".to_string()
     } else {
-        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    v_main();\n    return 0;\n}\n"
+        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    v_main();\n    return 0;\n}\n".to_string()
     };
     let mut includes: Vec<&str> = mods.iter().flat_map(|m| m.c_imports.iter().map(|c| c.header.as_str())).collect();
     includes.sort();
@@ -709,6 +727,7 @@ impl<'a> Gen<'a> {
             "float" => format!("((double)({}))", self.expr(&args[0])),
             "sqrt" => format!("sqrt({})", self.expr(&args[0])),
             "exit" => format!("exit((int)({}))", self.expr(&args[0])),
+            "assert" => format!("(({}) ? (void)0 : volt_panic(\"Prüfung fehlgeschlagen\", {}))", self.expr(&args[0]), e.span.line),
             "sin" | "cos" | "tan" | "exp" | "log" | "floor" | "ceil" => format!("{name}({})", self.expr(&args[0])),
             "pow" | "atan2" => format!("{name}({}, {})", self.expr(&args[0]), self.expr(&args[1])),
             "min" | "max" => {

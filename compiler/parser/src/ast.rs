@@ -85,6 +85,8 @@ pub struct CImport {
 
 #[derive(Default)]
 pub struct Module {
+    /// `test "name"`-Blöcke: (Anzeigename, Funktionsname `__test_N`); die Funktion steht zusätzlich in `fns`.
+    pub tests: Vec<(String, String)>,
     pub c_imports: Vec<CImport>,
     pub uses: Vec<(String, Span)>,
     pub structs: Vec<StructDecl>,
