@@ -190,3 +190,25 @@ fn web_ziel_baut_seite_wenn_clang_da_ist() {
     assert_eq!(&fs::read(dir.join("app.wasm")).unwrap()[..4], b"\0asm");
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn language_server_meldet_fehler_und_vervollstaendigt() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_volt")).arg("lsp").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let frame = |json: &str| format!("Content-Length: {}\r\n\r\n{json}", json.len());
+    let src = "use liste\\n\\nfn main()\\n    let x: str = 1\\n    liste.so\\n";
+    for m in [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string(),
+        format!(r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///tmp/volt-lsp-test/a.vt","text":"{src}"}}}}}}"#),
+        r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/volt-lsp-test/a.vt"},"position":{"line":4,"character":10}}}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":3,"method":"shutdown"}"#.to_string(),
+        r#"{"jsonrpc":"2.0","method":"exit"}"#.to_string(),
+    ] {
+        stdin.write_all(frame(&m).as_bytes()).unwrap();
+    }
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("soll str sein") && text.contains("publishDiagnostics"), "{text}");
+    assert!(text.contains("\"label\":\"sortiere\""), "{text}");
+}

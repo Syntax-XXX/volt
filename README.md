@@ -28,6 +28,8 @@ print("Summe = {summe}")
 
 ## Werkzeuge
 
+`volt lsp` ist ein Language-Server (Fehler beim Tippen, Vervollständigung, Hover) für Editoren.
+
 `volt run` (mit `--watch`), `build [--release]`, `check` (nur prüfen), `test` (test-Blöcke mit `assert`), `fmt` (Leerraum aufräumen), `new <name> --template cli|game|lib`, `parse --ast`.
 
 ## Spiele und C (Phase 4, Stand)

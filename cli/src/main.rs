@@ -7,6 +7,7 @@ use std::{
     process::{Command, ExitCode},
 };
 mod cimport;
+mod lsp;
 mod web;
 use volt_parser::ast::{dump, Module};
 use volt_types::Unit;
@@ -21,6 +22,7 @@ volt – die Programmiersprache Volt ⚡
   volt check <datei.vt>                           nur prüfen (Syntax und Typen), nichts bauen
   volt test <datei.vt>                            alle test-Blöcke ausführen
   volt fmt [--check] <datei…>                     Leerraum aufräumen (Leerzeichen am Zeilenende, Leerzeilen)
+  volt lsp                                        Language-Server für Editoren (stdin/stdout)
   volt new <name> [--template cli|game|lib]       neues Projekt anlegen
   volt parse <datei.vt> [--ast]                   Syntax prüfen, mit --ast den Syntaxbaum zeigen
   volt <skript.vts>                               Volt Script direkt starten (auch per `#!/usr/bin/env volt`)
@@ -60,6 +62,10 @@ fn main() -> ExitCode {
         }),
         (Some("test"), Some(file)) => run_tests(file),
         (Some("fmt"), _) => fmt(&args[1..]),
+        (Some("lsp"), _) => {
+            lsp::run();
+            Ok(0)
+        }
         (Some("new"), Some(name)) => new_project(&name.to_string_lossy(), args.iter().position(|a| a == "--template").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("cli")),
         (Some("parse"), Some(file)) => frontend(file, false, false).map(|units| {
             print!("{}", if flag("--ast") { dump(&units[0].module) } else { "Syntax ok\n".to_string() });
@@ -122,15 +128,32 @@ fn lex_parse(src: &str, script: bool) -> (Module, Vec<volt_lexer::Diag>) {
 
 /// Datei samt aller `use`-Module lesen, lexen, parsen und (für run/build) Typen prüfen. Fehler werden hier ausgegeben.
 fn frontend(path: &Path, check: bool, tests: bool) -> Result<Vec<Unit>, ()> {
+    let src = fs::read_to_string(path).map_err(|e| eprintln!("error: `{}` lässt sich nicht lesen: {e}", path.display()))?;
+    match load(path, src, check, tests) {
+        Ok(units) => Ok(units),
+        Err((sources, diags)) => {
+            for (u, d) in &diags {
+                eprintln!("{}", d.render(&sources[*u].file, &sources[*u].src));
+            }
+            if !diags.is_empty() {
+                eprintln!("{} Fehler – nichts gebaut", diags.len());
+            }
+            Err(())
+        }
+    }
+}
+
+/// Wie `frontend`, aber mit dem Quelltext von außen (Editor) und ohne Ausgabe: gibt bei Fehlern Quellen und Meldungen zurück.
+/// Die Quellen: Index 0 = die Datei selbst, danach die geladenen Module.
+fn load(path: &Path, src: String, check: bool, tests: bool) -> Result<Vec<Unit>, (Vec<Source>, Vec<(usize, volt_lexer::Diag)>)> {
     let script = match path.extension().and_then(|e| e.to_str()) {
         Some("vt") => false,
         Some("vts") => true,
         _ => {
             eprintln!("error: `{}` ist keine Volt-Datei\n     = tipp: Volt-Programme enden auf .vt, Volt-Skripte auf .vts", path.display());
-            return Err(());
+            return Err((Vec::new(), Vec::new()));
         }
     };
-    let src = fs::read_to_string(path).map_err(|e| eprintln!("error: `{}` lässt sich nicht lesen: {e}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new(""));
     let (mut module, d) = lex_parse(&src, script);
     // `volt test` braucht kein `main`: ein leeres reicht für die Prüfung des Programms
@@ -184,11 +207,7 @@ fn frontend(path: &Path, check: bool, tests: bool) -> Result<Vec<Unit>, ()> {
     if diags.is_empty() {
         return Ok(units);
     }
-    for (u, d) in &diags {
-        eprintln!("{}", d.render(&sources[*u].file, &sources[*u].src));
-    }
-    eprintln!("{} Fehler – nichts gebaut", diags.len());
-    Err(())
+    Err((sources, diags))
 }
 
 /// Volt → C → Programm. Ohne `out` landet das Programm im Cache neben der Quelldatei.
