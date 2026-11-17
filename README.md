@@ -30,6 +30,10 @@ print("Summe = {summe}")
 
 `use faden`: `faden.starte(f)`, `faden.Kanal[T]()` mit `sende`/`empfange`, `schlafe`, `warte` – kooperativ unter einer Sperre, der Müllsammler arbeitet mit allen Fäden (`examples/faeden.vt`).
 
+## HTTP
+
+`use http`: `http.diene(8080, behandle)` – Webserver mit einem Faden je Verbindung, 10 000 gleichzeitige Verbindungen getestet (`examples/http_server.vt`).
+
 ## Lernen
 
 [docs/TUTORIAL.md](docs/TUTORIAL.md): „Lerne Volt in einer Stunde“ – 14 kurze Kapitel, jedes Beispiel wird automatisch getestet.

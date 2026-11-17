@@ -38,9 +38,9 @@ static char* volt_stack_base;
 #ifndef VOLT_NO_GC
 // Fäden (std/faden.vt): Volt-Code läuft immer nur in einem Faden – wer läuft, hält `volt_gil`. Gewechselt wird nur an
 // Blockierstellen (schlafen, warten, `pause`), dort legt der Faden vorher seinen Stack-Bereich und seine Register für den Sammler ab.
-typedef struct { pthread_t id; char* base; char* sp; jmp_buf regs; int live; } volt_thr;
+typedef struct { pthread_t id; char* base; char* sp; jmp_buf regs; int live; int detached; } volt_thr;
 static pthread_mutex_t volt_gil = PTHREAD_MUTEX_INITIALIZER;
-static volt_thr* volt_thrs[512];
+static volt_thr* volt_thrs[16384];
 static int volt_nthrs;
 static volt_thr* volt_me(void) {
     pthread_t me = pthread_self();

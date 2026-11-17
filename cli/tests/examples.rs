@@ -261,3 +261,46 @@ fn paketmanager_holt_pakete_per_git() {
     assert!(!volt_in(&["add", "x", "/gibt/es/nicht"]).status.success());
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn http_server_antwortet_gleichzeitig() {
+    use std::io::{Read, Write};
+    let dir = std::env::temp_dir().join(format!("volt-http-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let port = 20000 + (std::process::id() % 20000) as u16;
+    let src = format!("use http\n\nfn behandle(a: http.Anfrage) -> http.Antwort\n    if a.pfad == \"/kaputt\"\n        return http.fehler(500, \"x\")\n    return http.text(\"{{a.methode}} {{a.pfad}} {{a.anfrage}} [{{a.inhalt}}]\")\n\nfn main()\n    http.diene({port}, behandle)\n");
+    let file = dir.join("s.vt");
+    fs::write(&file, src).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_volt")).args(["run", file.to_str().unwrap()]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    let ask = |req: String| -> String {
+        for _ in 0..100 {
+            if let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+                s.write_all(req.as_bytes()).unwrap();
+                let mut out = String::new();
+                s.read_to_string(&mut out).unwrap();
+                return out;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("Server startet nicht");
+    };
+    let r = ask("GET /a?x=1 HTTP/1.1\r\nHost: t\r\n\r\n".into());
+    assert!(r.starts_with("HTTP/1.1 200 OK") && r.ends_with("GET /a x=1 []"), "{r}");
+    let r = ask("POST /p HTTP/1.1\r\nHost: t\r\nContent-Length: 5\r\n\r\nhallo".into());
+    assert!(r.ends_with("POST /p  [hallo]"), "{r}");
+    assert!(ask("GET /kaputt HTTP/1.1\r\n\r\n".into()).starts_with("HTTP/1.1 500"));
+    let hs: Vec<_> = (0..200).map(|i| std::thread::spawn(move || ask_n(port, i))).collect();
+    for h in hs { assert!(h.join().unwrap()); }
+    child.kill().ok();
+    child.wait().ok();
+    fs::remove_dir_all(&dir).ok();
+}
+
+fn ask_n(port: u16, i: u32) -> bool {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.write_all(format!("GET /n{i} HTTP/1.1\r\n\r\n").as_bytes()).unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    out.ends_with(&format!("GET /n{i}  []"))
+}

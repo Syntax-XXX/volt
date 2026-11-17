@@ -9,7 +9,11 @@ var aufgaben = List[fn()]()
 # Einstieg für neue Fäden (vom Programm aufgerufen, nicht direkt benutzen).
 fn __lauf(nr: int)
     let f = aufgaben[nr]
+    aufgaben[nr] = __leer
     f()
+
+fn __leer()
+    return
 
 struct Faden
     nr: int
@@ -21,6 +25,11 @@ struct Faden
 fn starte(f: fn()) -> Faden
     aufgaben.push(f)
     return Faden(t.volt_thread_spawn(aufgaben.len() - 1))
+
+# Startet einen Faden, auf den niemand wartet (Verbindungen eines Servers): sein Platz wird beim Ende sofort frei.
+fn starte_los(f: fn())
+    aufgaben.push(f)
+    t.volt_thread_spawn_detached(aufgaben.len() - 1)
 
 fn schlafe(ms: int)
     t.volt_thread_sleep(ms)

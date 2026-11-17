@@ -111,6 +111,7 @@ const STD: &[(&str, &str)] = &[
     ("zeit", include_str!("../../std/zeit.vt")),
     ("web", include_str!("../../std/web.vt")),
     ("faden", include_str!("../../std/faden.vt")),
+    ("http", include_str!("../../std/http.vt")),
 ];
 
 fn std_module(name: &str) -> Option<&'static str> {

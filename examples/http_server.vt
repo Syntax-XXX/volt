@@ -1,0 +1,20 @@
+# Ein kleiner Webserver in Volt: eine Verbindung = ein Faden. Starten: volt run examples/http_server.vt, dann http://localhost:8080
+use http
+
+var besuche = 0
+
+fn behandle(a: http.Anfrage) -> http.Antwort
+    besuche += 1
+    if a.pfad == "/"
+        return http.html("<h1>Hallo aus Volt ⚡</h1><p>Besuch Nummer {besuche}</p><p><a href='/zeit'>Zeit</a> · <a href='/echo?x=1'>Echo</a></p>")
+    if a.pfad == "/zeit"
+        return http.json("\{\"besuche\": {besuche}\}")
+    if a.pfad == "/echo"
+        return http.text("{a.methode} {a.pfad}?{a.anfrage}\n{a.inhalt}")
+    if a.pfad == "/alt"
+        return http.weiter_zu("/")
+    return http.fehler(404, "nicht gefunden: {a.pfad}")
+
+fn main()
+    print("Server läuft auf http://localhost:8080 (Strg+C beendet)")
+    http.diene(8080, behandle)

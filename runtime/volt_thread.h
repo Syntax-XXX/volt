@@ -6,6 +6,7 @@
 static void volt_thread_entry(int64_t idx);  // das Programm definiert es (ruft `faden.__lauf`)
 #ifdef __wasm__
 static int volt_thread_spawn(int idx) { volt_thread_entry(idx); return 0; }
+static void volt_thread_spawn_detached(int idx) { volt_thread_entry(idx); }
 static void volt_thread_join(int handle) { (void)handle; }
 static void volt_thread_sleep(int ms) { (void)ms; }
 static void volt_thread_pause(void) {}
@@ -28,10 +29,14 @@ static void* volt_thread_main(void* p) {
     volt_thread_entry(a.idx);
     a.rec->live = 0;
     a.rec->base = 0;
+    if (a.rec->detached) {  // niemand wartet auf diesen Faden: Eintrag sofort freigeben
+        for (int i = 0; i < volt_nthrs; i++) if (volt_thrs[i] == a.rec) volt_thrs[i] = 0;
+        free(a.rec);
+    }
     pthread_mutex_unlock(&volt_gil);
     return 0;
 }
-static int volt_thread_spawn(int idx) {
+static int volt_thread_spawn_ex(int idx, int detached) {
     volt_thr* rec = calloc(1, sizeof *rec);
     volt_start_arg* a = malloc(sizeof *a);
     if (!rec || !a) volt_panic("kein Speicher mehr frei", 0);
@@ -40,12 +45,20 @@ static int volt_thread_spawn(int idx) {
     rec->live = 1;
     int slot = -1;
     for (int i = 0; i < volt_nthrs; i++) if (!volt_thrs[i]) { slot = i; break; }
-    if (slot < 0 && volt_nthrs < 512) slot = volt_nthrs++;
-    if (slot < 0) volt_panic("zu viele Fäden (höchstens 512 gleichzeitig)", 0);
+    if (slot < 0 && volt_nthrs < 16384) slot = volt_nthrs++;
+    if (slot < 0) volt_panic("zu viele Fäden (höchstens 16384 gleichzeitig)", 0);
+    rec->detached = detached;
     volt_thrs[slot] = rec;
-    if (pthread_create(&rec->id, 0, volt_thread_main, a)) volt_panic("Faden lässt sich nicht starten", 0);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, (size_t)1 << 20);  // 1 MB reichen für Volt-Funktionen; viele Fäden brauchen wenig Platz
+    if (detached) pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&rec->id, &attr, volt_thread_main, a)) volt_panic("Faden lässt sich nicht starten", 0);
+    pthread_attr_destroy(&attr);
     return slot;
 }
+static int volt_thread_spawn(int idx) { return volt_thread_spawn_ex(idx, 0); }
+static void volt_thread_spawn_detached(int idx) { volt_thread_spawn_ex(idx, 1); }
 static void volt_thread_join(int handle) {
     if (handle < 0 || handle >= volt_nthrs || !volt_thrs[handle]) return;
     volt_thr* rec = volt_thrs[handle];
