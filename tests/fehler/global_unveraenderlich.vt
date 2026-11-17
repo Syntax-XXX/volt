@@ -1,0 +1,4 @@
+let konstante = 5
+
+fn main()
+    konstante = 6

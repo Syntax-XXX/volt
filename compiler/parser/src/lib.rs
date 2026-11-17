@@ -34,12 +34,13 @@ fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
                 m.tests.push(t);
                 m.fns.push(f);
             }),
+            Tok::Let | Tok::Var if !script => p.stmt().map(|st| m.globals.push(st)),
             Tok::Dedent => Ok(()), // bleibt nur nach einem schon gemeldeten Fehler übrig
             Tok::Indent => Err(Diag::new(p.span(), "unerwartete Einrückung").tip("Funktionen beginnen ganz links, ohne Leerzeichen davor")),
             _ if script => p.stmt().map(|s| top.push(s)),
             _ => {
-                let d = Diag::new(p.span(), "auf oberster Ebene sind nur Funktionen, Typen und `use` erlaubt").tip("packe den Code in `fn main()` – oder schreibe ein Skript (.vts)");
-                while !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use | Tok::Eof) && !matches!(p.peek(), Tok::Ident(n) if n == "import" || n == "test") {
+                let d = Diag::new(p.span(), "auf oberster Ebene sind nur Funktionen, Typen, Variablen und `use` erlaubt").tip("packe den Code in `fn main()` – oder schreibe ein Skript (.vts)");
+                while !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use | Tok::Let | Tok::Var | Tok::Eof) && !matches!(p.peek(), Tok::Ident(n) if n == "import" || n == "test") {
                     p.i += 1;
                 }
                 Err(d)
@@ -47,7 +48,7 @@ fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
         };
         if let Err(d) = item {
             p.diags.push(d);
-            if !p.at(&Tok::Eof) && !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use) || p.i == before {
+            if !p.at(&Tok::Eof) && !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use | Tok::Let | Tok::Var) || p.i == before {
                 p.sync();
             }
         }

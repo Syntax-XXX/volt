@@ -18,7 +18,7 @@ fn preprocess(header: &str, dir: &Path, dm: bool) -> Result<String, String> {
     };
     for cc in candidates {
         let mut cmd = Command::new(cc);
-        cmd.args(["-E", "-P", "-x", "c"]).arg(format!("-I{}", dir.display())).arg(format!("-I{}/include", dir.display()));
+        cmd.args(["-E", "-P", "-x", "c"]).arg(format!("-I{}", dir.display())).arg(format!("-I{}/include", dir.display())).arg(format!("-I{}/.volt-cache/include", dir.display()));
         if dm {
             cmd.arg("-dM");
         }

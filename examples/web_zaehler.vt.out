@@ -1,0 +1,4 @@
+[web] setze_html #app = <h1>Zähler ⚡</h1><p style='font-size:3rem;margin:.5rem 0' id='zahl'>0</p><button id='plus'>+1</button> <button id='minus'>−1</button> <button id='null'>zurücksetzen</button>
+[web] lausche #plus click -> 1
+[web] lausche #minus click -> 2
+[web] lausche #null click -> 3

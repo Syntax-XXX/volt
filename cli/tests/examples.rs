@@ -155,3 +155,38 @@ fn eigene_datei_hat_vorrang_vor_der_standardbibliothek() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "eigene\n");
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn web_ziel_meldet_fehlendes_clang_verstaendlich() {
+    let dir = std::env::temp_dir().join(format!("volt-web-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("w.vt");
+    fs::write(&file, "use web\n\nfn main()\n    web.setze_text(\"#a\", \"x\")\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_volt")).args(["build", file.to_str().unwrap(), "--target", "web", "-o", dir.join("o").to_str().unwrap()]).env("VOLT_WASM_CC", "gibt-es-nicht-clang").output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("nicht gefunden") && err.contains("wasm"), "{err}");
+    // das Programm läuft auch ohne Browser (Aufrufe werden ausgegeben)
+    let run = volt(&["run", file.to_str().unwrap()]);
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "[web] setze_text #a = x\n");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Mit einem echten WebAssembly-clang (VOLT_WASM_CC gesetzt oder `clang` mit wasm32) wird die ganze Seite gebaut.
+#[test]
+fn web_ziel_baut_seite_wenn_clang_da_ist() {
+    let cc = std::env::var("VOLT_WASM_CC").unwrap_or_else(|_| "clang".into());
+    let has_wasm = Command::new(&cc).args(["--target=wasm32-wasi", "--version"]).output().is_ok_and(|o| o.status.success()) && std::env::var("VOLT_WASM_CC").is_ok();
+    if !has_wasm {
+        eprintln!("übersprungen: kein WebAssembly-clang (VOLT_WASM_CC setzen)");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("volt-web-build-{}", std::process::id()));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let out = volt(&["build", root.join("examples/web_zaehler.vt").to_str().unwrap(), "--target", "web", "-o", dir.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    for f in ["index.html", "app.wasm", "volt.js"] {
+        assert!(dir.join(f).exists(), "{f} fehlt");
+    }
+    assert_eq!(&fs::read(dir.join("app.wasm")).unwrap()[..4], b"\0asm");
+    fs::remove_dir_all(&dir).ok();
+}

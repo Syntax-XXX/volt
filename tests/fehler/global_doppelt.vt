@@ -1,0 +1,5 @@
+var zaehler = 0
+var zaehler = 1
+
+fn main()
+    print(zaehler)

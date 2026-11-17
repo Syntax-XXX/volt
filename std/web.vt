@@ -1,0 +1,32 @@
+# std: Browser. `use web` → web.setze_html("#app", "<h1>Hallo</h1>"), web.lausche("#knopf", "click", 1) …
+# Ereignisse kommen in `fn ereignis(id: int)` an (id = die Zahl aus `lausche`/`alle`). Zustand liegt in Variablen auf oberster Ebene.
+# Beim normalen `volt run` geben die Funktionen ihre Aufrufe nur aus; im Browser (`volt build --target web`, `volt serve`) ändern sie die Seite.
+import c "volt_web.h" as w
+
+fn setze_text(selektor: str, text: str)
+    w.volt_set_text(selektor, text)
+
+fn setze_html(selektor: str, html: str)
+    w.volt_set_html(selektor, html)
+
+fn haenge_an(selektor: str, html: str)
+    w.volt_append_html(selektor, html)
+
+fn wert(selektor: str) -> str
+    return w.volt_get_value(selektor)
+
+fn setze_wert(selektor: str, neuer_wert: str)
+    w.volt_set_value(selektor, neuer_wert)
+
+fn lausche(selektor: str, ereignis: str, id: int)
+    w.volt_listen(selektor, ereignis, id)
+
+fn alle(ms: int, id: int)
+    w.volt_every(ms, id)
+
+fn protokoll(text: str)
+    w.volt_log(text)
+
+# Text für HTML unschädlich machen (&, <, >, ").
+fn sicher(text: str) -> str
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")

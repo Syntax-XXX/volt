@@ -1,0 +1,26 @@
+# Variablen auf oberster Ebene leben so lange wie das Programm – wichtig für Spiele und Web-Seiten.
+let titel = "Zähler"
+var zaehler = 0
+var namen = List[str]()
+var plan = Map[str, int]()
+
+fn hoch()
+    zaehler += 1
+    namen.push("eintrag {zaehler}")
+    plan["n{zaehler}"] = zaehler * 10
+
+fn abfall(n: int) -> int
+    var s = 0
+    for i in 0..n
+        s += "müll {i} noch mehr Text zum Füllen".len()
+    return s
+
+fn main()
+    print(titel)
+    for i in 0..3
+        hoch()
+        abfall(2000000)
+    print(zaehler)
+    print(namen.join(", "))
+    print(plan["n2"])
+    print(plan.len())

@@ -1,7 +1,13 @@
 // Volt-Runtime (Phase 1): Ausgabe, String-Bau und sichere Division.
 // Der Compiler setzt diese Datei vor jedes erzeugte C-Programm.
 #include <inttypes.h>
+// WebAssembly: kein setjmp, und Variablen liegen nicht im Speicher – ein Stack-Scan wäre unzuverlässig → Müllsammler aus
+// (shortcut: Web-Seiten laufen kurz; Upgrade mit Ownership/RC im Compiler).
+#ifdef __wasm__
+#define VOLT_NO_GC 1
+#else
 #include <setjmp.h>
+#endif
 #include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -66,10 +72,21 @@ static void volt_mark_range(const char* from, const char* to) {
     for (; from + sizeof(uintptr_t) <= to; from += sizeof(uintptr_t)) volt_mark_word(*(const uintptr_t*)from);
 }
 
+// Globale Variablen des Programms: ihr Inhalt zählt als erreichbar (das Programm meldet sie in volt_init an).
+static struct { const char* p; size_t n; } volt_roots[512];
+static size_t volt_nroots;
+static void volt_gc_root(void* p, size_t n) {
+    if (volt_nroots < sizeof volt_roots / sizeof *volt_roots) { volt_roots[volt_nroots].p = (const char*)p; volt_roots[volt_nroots++].n = n; }
+}
+
 #if defined(__GNUC__) && !defined(__TINYC__)
 __attribute__((noinline))
 #endif
 static void volt_gc_collect(void) {
+#ifdef VOLT_NO_GC
+    volt_limit = (size_t)-1;
+    return;
+#else
     jmp_buf regs;
     volatile char top = 0;
     setjmp(regs);  // Register in `regs` auf den Stack retten
@@ -80,6 +97,7 @@ static void volt_gc_collect(void) {
     qsort(volt_blks, volt_nblk, sizeof *volt_blks, volt_cmp_blk);
     const char* sp = (const char*)&top < (const char*)&regs ? (const char*)&top : (const char*)&regs;
     volt_mark_range(sp, volt_stack_base);
+    for (size_t r = 0; r < volt_nroots; r++) volt_mark_range(volt_roots[r].p, volt_roots[r].p + volt_roots[r].n);
     while (volt_nmark) {
         volt_hdr* h = volt_mstack[--volt_nmark];
         volt_mark_range((const char*)(h + 1), (const char*)(h + 1) + h->n);
@@ -93,6 +111,7 @@ static void volt_gc_collect(void) {
     volt_nblk = j;
     volt_since = 0;
     volt_limit = live * 2 > ((size_t)8 << 20) ? live * 2 : ((size_t)8 << 20);
+#endif
 }
 
 // Neuer Block; `old` (aus volt_realloc) wird hineinkopiert, der alte wird beim nächsten Lauf eingesammelt.

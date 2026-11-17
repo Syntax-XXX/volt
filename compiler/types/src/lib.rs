@@ -99,6 +99,8 @@ struct Checker {
     unit: usize,
     /// Sichtbare Variablen, innerster Block zuletzt.
     scopes: Vec<HashMap<String, Var>>,
+    /// Variablen auf oberster Ebene je Datei (stehen in jeder Funktion der Datei ganz unten im Gültigkeitsbereich).
+    globals: Vec<HashMap<String, Var>>,
     /// Rückgabetyp der Funktion, die gerade geprüft wird.
     ret: Type,
     loops: u32,
@@ -130,6 +132,7 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
         inst_args: HashMap::new(),
         unit: 0,
         scopes: Vec::new(),
+        globals: vec![HashMap::new(); units.len()],
         ret: Type::Void,
         loops: 0,
         diags: Vec::new(),
@@ -228,6 +231,22 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
                 c.defaults(&mut v.fields, &e.key, Some(i));
             }
         }
+    }
+    // 4b. Variablen auf oberster Ebene: Startwerte der Reihe nach prüfen; Namen gelten programmweit nur einmal.
+    let mut global_owner: HashMap<String, usize> = HashMap::new();
+    for (ui, u) in units.iter_mut().enumerate() {
+        c.unit = ui;
+        c.scopes = vec![HashMap::new()];
+        for g in &mut u.module.globals {
+            if let Stmt::Let { name, span, .. } = g {
+                if global_owner.insert(name.clone(), ui).is_some_and(|other| other != ui) {
+                    c.err(Diag::new(*span, format!("die Variable `{name}` gibt es schon in einer anderen Datei")).tip("globale Namen müssen im ganzen Programm eindeutig sein"));
+                }
+            }
+            c.stmt(g);
+        }
+        c.globals[ui] = c.scopes.pop().unwrap_or_default();
+        c.scopes.clear();
     }
     // 5. `main` im Hauptprogramm.
     c.unit = 0;
@@ -668,6 +687,8 @@ impl Checker {
     fn function(&mut self, f: &mut FnDecl, owner: Option<&str>) {
         self.ret = f.ret.clone();
         self.loops = 0;
+        self.scopes.clear();
+        self.scopes.push(self.globals.get(self.unit).cloned().unwrap_or_default());
         self.scopes.push(HashMap::new());
         if let (Some(this), Some(owner)) = (f.this, owner) {
             let ty = match self.types.get(owner) {

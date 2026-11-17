@@ -22,6 +22,10 @@ print("Summe = {summe}")
 
 `struct` mit Methoden, `enum` mit Daten und `match`, Optionals `T?`, Fehler `T!` mit `?`, `List`, `Map`, String-Funktionen, Module mit `use`. Meilenstein: [examples/abenteuer.vt](examples/abenteuer.vt), ein Textadventure komplett in Volt (`volt run examples/abenteuer.vt`).
 
+## Web (Phase 5, Stand)
+
+`volt build x.vt --target web` baut aus einem Volt-Programm eine fertige Seite (WebAssembly + `index.html`), `volt serve x.vt` liefert sie aus und lädt bei jeder Änderung neu. `use web` verbindet das Programm mit der Seite (`examples/web_zaehler.vt`, `examples/web_todo.vt` – beide im echten Browser getestet). Braucht clang mit WebAssembly-Unterstützung. Noch offen: Komponenten-Syntax mit HTML-Vorlagen (braucht Funktionswerte).
+
 ## Werkzeuge
 
 `volt run` (mit `--watch`), `build [--release]`, `check` (nur prüfen), `test` (test-Blöcke mit `assert`), `fmt` (Leerraum aufräumen), `new <name> --template cli|game|lib`, `parse --ast`.

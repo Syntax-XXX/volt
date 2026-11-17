@@ -1,0 +1,47 @@
+# Todo-App im Browser. Bauen: volt build examples/web_todo.vt --target web   ·   Entwickeln: volt serve examples/web_todo.vt
+use web
+
+var aufgaben = List[str]()
+var erledigt = List[bool]()
+
+# Ereignis-Nummern: 1 = hinzufügen, 1000 + i = abhaken, 2000 + i = löschen
+fn zeichne()
+    var offen = 0
+    var liste = ""
+    for i in 0..aufgaben.len()
+        var stil = ""
+        var haken = "○"
+        if erledigt[i]
+            stil = " style='text-decoration:line-through;opacity:.55'"
+            haken = "●"
+        else
+            offen += 1
+        liste = "{liste}<li><button id='t{i}'>{haken}</button> <span{stil}>{web.sicher(aufgaben[i])}</span> <button id='d{i}'>✕</button></li>"
+    var untertitel = "{offen} offen"
+    if aufgaben.len() == 0
+        untertitel = "noch nichts zu tun"
+    web.setze_html("#app", "<h1>Aufgaben ⚡</h1><p><input id='neu' placeholder='Was ist zu tun?' size='28'> <button id='add'>hinzufügen</button></p><p>{untertitel}</p><ul>{liste}</ul>")
+    web.lausche("#add", "click", 1)
+    for i in 0..aufgaben.len()
+        web.lausche("#t{i}", "click", 1000 + i)
+        web.lausche("#d{i}", "click", 2000 + i)
+
+fn ereignis(id: int)
+    if id == 1
+        let text = web.wert("#neu").trim()
+        if text.len() > 0
+            aufgaben.push(text)
+            erledigt.push(false)
+    else if id >= 2000
+        aufgaben.remove(id - 2000)
+        erledigt.remove(id - 2000)
+    else if id >= 1000
+        erledigt[id - 1000] = not erledigt[id - 1000]
+    zeichne()
+
+fn main()
+    aufgaben.push("Volt installieren")
+    erledigt.push(true)
+    aufgaben.push("Todo-App bauen")
+    erledigt.push(false)
+    zeichne()

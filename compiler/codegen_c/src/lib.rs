@@ -32,6 +32,24 @@ pub fn emit_tests(mods: &[&Module]) -> String {
 }
 
 fn emit_with(mods: &[&Module], tests: bool) -> String {
+    emit_mode(mods, if tests { Mode::Tests } else { Mode::Normal })
+}
+
+/// Für das Web-Ziel (WebAssembly im Reaktor-Modus): kein `main`, sondern die Ausgänge `volt_start` (Startwerte + `main`)
+/// und – wenn das Programm `fn ereignis(id: int)` hat – `volt_event(id)`, das der Browser bei Ereignissen aufruft.
+pub fn emit_web(mods: &[&Module]) -> String {
+    emit_mode(mods, Mode::Web)
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum Mode {
+    Normal,
+    Tests,
+    Web,
+}
+
+fn emit_mode(mods: &[&Module], mode: Mode) -> String {
+    let tests = mode == Mode::Tests;
     let mut g = Gen { types: String::new(), protos: String::new(), body: String::new(), done: HashSet::new(), structs: HashMap::new(), enums: HashMap::new(), tmp: 0, mut_self: false, ret: Type::Void, defers: Vec::new(), loops: Vec::new(), externs: HashMap::new() };
     for m in mods {
         for ci in &m.c_imports {
@@ -54,21 +72,38 @@ fn emit_with(mods: &[&Module], tests: bool) -> String {
     for f in &fns {
         g.function(f);
     }
+    // Variablen auf oberster Ebene: C-Variable + Startwert in `volt_init` (Reihenfolge wie im Quelltext)
+    let mut init = String::from("\nstatic void volt_init(void) {\n");
+    for m in mods {
+        for gl in &m.globals {
+            if let Stmt::Let { name, ty, init: e, .. } = gl {
+                let ct = g.ctype(ty);
+                g.protos += &format!("static {ct} v_{name};\n");
+                let value = g.expr(e);
+                init += &format!("    v_{name} = {value};\n    volt_gc_root(&v_{name}, sizeof v_{name});\n");
+            }
+        }
+    }
+    init += "}\n";
     let main_ret = mods[0].fns.iter().find(|f| f.name == "main").map(|f| f.ret.clone()).unwrap_or(Type::Void);
     let test_keys: Vec<String> = mods.iter().flat_map(|m| m.tests.iter().filter_map(|t| m.fns.iter().find(|f| f.name == t.1).map(|f| fname(&f.key)))).collect();
-    let main = if tests {
+    let has_event = mods[0].fns.iter().any(|f| f.name == "ereignis" && f.params.len() == 1 && f.params[0].ty == Type::Int && f.ret == Type::Void);
+    let main = if mode == Mode::Web {
+        let event = if has_event { "\n__attribute__((export_name(\"volt_event\"))) void volt_event(int id) {\n    v_ereignis((int64_t)id);\n}\n" } else { "" };
+        format!("\n__attribute__((export_name(\"volt_start\"))) void volt_start(void) {{\n    volt_init();\n    v_main();\n}}\n{event}")
+    } else if tests {
         let cases: String = test_keys.iter().enumerate().map(|(i, k)| format!("        case {i}: {k}(); break;\n")).collect();
-        format!("\nint main(int argc, char** argv) {{\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    switch (argc > 1 ? atoi(argv[1]) : -1) {{\n{cases}        default: return 2;\n    }}\n    return 0;\n}}\n")
+        format!("\nint main(int argc, char** argv) {{\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    volt_init();\n    switch (argc > 1 ? atoi(argv[1]) : -1) {{\n{cases}        default: return 2;\n    }}\n    return 0;\n}}\n")
     } else if is_res_void(&main_ret) {
-        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    volt_res_void r = v_main();\n    if (!r.ok) {\n        fflush(stdout);\n        fprintf(stderr, \"error: %s\\n\", r.err);\n        return 1;\n    }\n    return 0;\n}\n".to_string()
+        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    volt_init();\n    volt_res_void r = v_main();\n    if (!r.ok) {\n        fflush(stdout);\n        fprintf(stderr, \"error: %s\\n\", r.err);\n        return 1;\n    }\n    return 0;\n}\n".to_string()
     } else {
-        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    v_main();\n    return 0;\n}\n".to_string()
+        "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    volt_init();\n    v_main();\n    return 0;\n}\n".to_string()
     };
     let mut includes: Vec<&str> = mods.iter().flat_map(|m| m.c_imports.iter().map(|c| c.header.as_str())).collect();
     includes.sort();
     includes.dedup();
     let includes: String = includes.iter().map(|h| format!("#include \"{h}\"\n")).collect();
-    format!("{RUNTIME}\n{includes}\n{}\n{}{}{main}", g.types, g.protos, g.body)
+    format!("{RUNTIME}\n{includes}\n{}\n{}{}{init}{main}", g.types, g.protos, g.body)
 }
 
 fn is_res_void(t: &Type) -> bool {

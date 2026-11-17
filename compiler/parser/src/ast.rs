@@ -85,6 +85,8 @@ pub struct CImport {
 
 #[derive(Default)]
 pub struct Module {
+    /// Variablen auf oberster Ebene (`var zaehler = 0`): leben so lange wie das Programm, werden vor `main` der Reihe nach gesetzt.
+    pub globals: Vec<Stmt>,
     /// `test "name"`-Blöcke: (Anzeigename, Funktionsname `__test_N`); die Funktion steht zusätzlich in `fns`.
     pub tests: Vec<(String, String)>,
     pub c_imports: Vec<CImport>,
@@ -343,6 +345,9 @@ pub fn dump(m: &Module) -> String {
     let mut out = String::new();
     for (name, _) in &m.uses {
         out += &format!("use {name}\n");
+    }
+    for g in &m.globals {
+        dump_block(&mut out, std::slice::from_ref(g), 0);
     }
     for c in &m.c_imports {
         out += &format!("import c \"{}\" as {}{}\n", c.header, c.alias, c.libs.iter().map(|l| format!(" link \"{l}\"")).collect::<String>());

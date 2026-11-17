@@ -7,6 +7,7 @@ use std::{
     process::{Command, ExitCode},
 };
 mod cimport;
+mod web;
 use volt_parser::ast::{dump, Module};
 use volt_types::Unit;
 
@@ -15,6 +16,8 @@ volt – die Programmiersprache Volt ⚡
 
   volt run <datei.vt> [--watch]                   kompilieren und starten; mit --watch bei jeder Änderung neu (Strg+C beendet)
   volt build <datei.vt> [--release] [-o <ziel>]   Programm bauen
+  volt build <datei.vt> --target web [-o ordner]  Web-Seite bauen (WebAssembly + index.html), braucht clang mit wasm32
+  volt serve <datei.vt> [--port 8000] [--host h]  bauen, ausliefern, bei Änderung neu bauen und Browser neu laden
   volt check <datei.vt>                           nur prüfen (Syntax und Typen), nichts bauen
   volt test <datei.vt>                            alle test-Blöcke ausführen
   volt fmt [--check] <datei…>                     Leerraum aufräumen (Leerzeichen am Zeilenende, Leerzeilen)
@@ -35,6 +38,17 @@ fn main() -> ExitCode {
         (Some(script), _) if script.ends_with(".vts") || script.ends_with(".vt") => run(Path::new(script)),
         (Some("run"), Some(file)) if flag("--watch") => watch(file),
         (Some("run"), Some(file)) => run(file),
+        (Some("serve"), Some(file)) => {
+            let opt = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1));
+            web::serve(file, opt("--host").map(String::as_str).unwrap_or("127.0.0.1"), opt("--port").and_then(|p| p.parse().ok()).unwrap_or(8000))
+        }
+        (Some("build"), Some(file)) if args.iter().position(|a| a == "--target").and_then(|i| args.get(i + 1)).is_some_and(|t| t == "web") => {
+            let out = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(file.file_stem().unwrap_or_default()).with_extension("web"));
+            web::build(file, &out).map(|_| {
+                println!("fertig: {}/ (index.html, app.wasm, volt.js) – mit `volt serve` oder jedem Webserver ausliefern", out.display());
+                0
+            })
+        }
         (Some("build"), Some(file)) => {
             let out = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).map(PathBuf::from);
             let default = PathBuf::from(file.file_stem().unwrap_or_default());
@@ -85,6 +99,7 @@ const STD: &[(&str, &str)] = &[
     ("text", include_str!("../../std/text.vt")),
     ("mathe", include_str!("../../std/mathe.vt")),
     ("zeit", include_str!("../../std/zeit.vt")),
+    ("web", include_str!("../../std/web.vt")),
 ];
 
 fn std_module(name: &str) -> Option<&'static str> {
@@ -151,8 +166,9 @@ fn frontend(path: &Path, check: bool, tests: bool) -> Result<Vec<Unit>, ()> {
         }
         i += 1;
     }
-    // C-Importe: Prototypen und Konstanten der Header einlesen
+    // C-Importe: Prototypen und Konstanten der Header einlesen (eingebaute Header liegen im Cache)
     if check {
+        web::ensure_headers(dir);
         for (i, u) in units.iter_mut().enumerate() {
             for ci in &mut u.module.c_imports {
                 match cimport::scan(&ci.header, dir) {
@@ -219,7 +235,8 @@ fn compile_mode(path: &Path, release: bool, out: Option<PathBuf>, tests: bool) -
         if release {
             cmd.arg("-O2");
         }
-        cmd.arg(format!("-I{}", path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")).display()));
+        let src_dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        cmd.arg(format!("-I{}", src_dir.display())).arg(format!("-I{}/.volt-cache/include", src_dir.display()));
         for lib in units.iter().flat_map(|u| u.module.c_imports.iter().flat_map(|c| &c.libs)) {
             cmd.arg(format!("-l{lib}"));
         }
