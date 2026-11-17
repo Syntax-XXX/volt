@@ -1,5 +1,5 @@
 # Ein Zähler im Browser. Bauen: volt build examples/web_zaehler.vt --target web   ·   Entwickeln: volt serve examples/web_zaehler.vt
-# Ereignisse (Klicks, Timer) kommen in `ereignis` an; der Zustand liegt in Variablen auf oberster Ebene.
+# Behandler sind ganz normale Funktionen ohne Parameter: web.klick("#plus", erhoehen). Der Zustand liegt in Variablen oben.
 use web
 
 var zaehler = 0
@@ -7,17 +7,20 @@ var zaehler = 0
 fn zeige()
     web.setze_text("#zahl", "{zaehler}")
 
-fn ereignis(id: int)
-    if id == 1
-        zaehler += 1
-    else if id == 2
-        zaehler -= 1
-    else
-        zaehler = 0
+fn erhoehen()
+    zaehler += 1
+    zeige()
+
+fn verringern()
+    zaehler -= 1
+    zeige()
+
+fn zuruecksetzen()
+    zaehler = 0
     zeige()
 
 fn main()
     web.setze_html("#app", "<h1>Zähler ⚡</h1><p style='font-size:3rem;margin:.5rem 0' id='zahl'>0</p><button id='plus'>+1</button> <button id='minus'>−1</button> <button id='null'>zurücksetzen</button>")
-    web.lausche("#plus", "click", 1)
-    web.lausche("#minus", "click", 2)
-    web.lausche("#null", "click", 3)
+    web.klick("#plus", erhoehen)
+    web.klick("#minus", verringern)
+    web.klick("#null", zuruecksetzen)

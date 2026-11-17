@@ -21,6 +21,27 @@ fn setze_wert(selektor: str, neuer_wert: str)
 fn lausche(selektor: str, ereignis: str, id: int)
     w.volt_listen(selektor, ereignis, id)
 
+# Behandler als Funktionswerte: `web.klick("#plus", erhoehen)` – die Funktion hat keine Parameter. Die Nummern ab 100000 gehören
+# diesem Modul, kleinere bleiben für `fn ereignis(id: int)` des Programms.
+var behandler = List[fn()]()
+
+fn registriere(aktion: fn()) -> int
+    behandler.push(aktion)
+    return 100000 + behandler.len() - 1
+
+# Vom Browser aufgerufen (id ab 100000).
+fn fuehre_aus(id: int)
+    behandler[id - 100000]()
+
+fn bei(selektor: str, ereignis: str, aktion: fn())
+    w.volt_listen(selektor, ereignis, registriere(aktion))
+
+fn klick(selektor: str, aktion: fn())
+    bei(selektor, "click", aktion)
+
+fn takt(ms: int, aktion: fn())
+    w.volt_every(ms, registriere(aktion))
+
 fn alle(ms: int, id: int)
     w.volt_every(ms, id)
 

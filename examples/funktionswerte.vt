@@ -1,0 +1,61 @@
+# Funktionswerte: Funktionen als Argumente, in Variablen, Listen und Feldern.
+fn quadrat(x: int) -> int
+    return x * x
+
+fn verdopple(x: int) -> int
+    return x * 2
+
+fn ist_gerade(x: int) -> bool
+    return x % 2 == 0
+
+fn wende_an(f: fn(int) -> int, wert: int) -> int
+    return f(wert)
+
+fn abbilden[T, U](xs: List[T], f: fn(T) -> U) -> List[U]
+    let out = List[U]()
+    for x in xs
+        out.push(f(x))
+    return out
+
+fn filtere[T](xs: List[T], behalte: fn(T) -> bool) -> List[T]
+    let out = List[T]()
+    for x in xs
+        if behalte(x)
+            out.push(x)
+    return out
+
+fn falte[T, A](xs: List[T], start: A, f: fn(A, T) -> A) -> A
+    var acc = start
+    for x in xs
+        acc = f(acc, x)
+    return acc
+
+fn addiere(a: int, b: int) -> int
+    return a + b
+
+fn gruesse(name: str)
+    print("Hallo, {name}!")
+
+struct Knopf
+    text: str
+    aktion: fn(str)
+
+    fn druecke(self)
+        self.aktion(self.text)
+
+fn main()
+    print(wende_an(quadrat, 7))
+    let f = verdopple
+    print(f(21))
+    let zahlen = [1, 2, 3, 4, 5, 6]
+    print(abbilden(zahlen, quadrat).len())
+    print(filtere(zahlen, ist_gerade).len())
+    print(falte(zahlen, 0, addiere))
+    let namen = abbilden(zahlen, quadrat)
+    print(namen[5])
+    let schritte = [quadrat, verdopple]
+    var wert = 3
+    for s in schritte
+        wert = s(wert)
+    print(wert)
+    Knopf("Welt", gruesse).druecke()

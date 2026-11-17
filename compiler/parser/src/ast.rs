@@ -26,6 +26,8 @@ pub enum Type {
     None,
     /// Der Typ von `error(…)`, passt in jedes `T!`.
     Error,
+    /// Funktionswert: `fn(int, str) -> bool`.
+    Fn(Vec<Type>, Box<Type>),
 }
 
 impl Type {
@@ -45,6 +47,7 @@ impl Type {
             Type::Res(t) => format!("{}!", t.name()),
             Type::None => "none".into(),
             Type::Error => "error".into(),
+            Type::Fn(ps, r) => format!("fn({}){}", ps.iter().map(Type::name).collect::<Vec<_>>().join(", "), if **r == Type::Void { String::new() } else { format!(" -> {}", r.name()) }),
         }
     }
 
@@ -108,9 +111,10 @@ pub struct Module {
 /// Ein Typ, wie er im Quelltext steht: `int`, `modul.Player`, `List[int]`, `Map[str, int]?`, `!`.
 #[derive(Debug, Clone)]
 pub struct TypeRef {
-    /// Leer bei `!` allein.
+    /// Leer bei `!` allein, `fn` bei Funktionstypen (dann sind `args` die Parameter und `ret` die Rückgabe).
     pub name: String,
     pub args: Vec<TypeRef>,
+    pub ret: Option<Box<TypeRef>>,
     /// `?` und `!` in Schreibreihenfolge.
     pub suffix: Vec<char>,
     pub span: Span,
@@ -118,6 +122,14 @@ pub struct TypeRef {
 
 impl TypeRef {
     pub fn text(&self) -> String {
+        if self.name == "fn" {
+            let mut s = format!("fn({})", self.args.iter().map(TypeRef::text).collect::<Vec<_>>().join(", "));
+            if let Some(r) = &self.ret {
+                s += &format!(" -> {}", r.text());
+            }
+            s.extend(&self.suffix);
+            return s;
+        }
         let mut s = self.name.clone();
         if !self.args.is_empty() {
             s += &format!("[{}]", self.args.iter().map(TypeRef::text).collect::<Vec<_>>().join(", "));
@@ -278,6 +290,8 @@ pub enum ExprKind {
     /// `wert?`
     Try(Box<Expr>),
     // --- ab hier nur vom Typchecker erzeugt ---
+    /// Name einer Funktion als Wert (Schlüssel).
+    FnRef(String),
     Invoke { target: Target, args: Vec<Expr> },
     /// Enum-Wert: `Shape.Circle(1.0)` oder `Dir.North`.
     Variant { key: String, index: usize, args: Vec<Expr> },
@@ -298,6 +312,8 @@ pub enum Target {
     Builtin(&'static str),
     /// Eingebaute Methode auf str/List/Map/Optional, `args[0]` ist der Empfänger.
     BuiltinMethod(&'static str),
+    /// Aufruf eines Funktionswerts: `args[0]` ist der Wert, der Rest die Argumente.
+    Indirect,
 }
 
 /// Ein Stück eines Strings: fester Text oder eine Einfügung `{ausdruck}`.
@@ -523,5 +539,6 @@ pub fn dump_expr(e: &Expr) -> String {
         ExprKind::Invoke { target, args } => format!("(invoke {target:?}{})", list(args.iter().map(dump_expr))),
         ExprKind::Variant { key, index, args } => format!("(variant {key} {index}{})", list(args.iter().map(dump_expr))),
         ExprKind::Wrap(x) => format!("(wrap {})", dump_expr(x)),
+        ExprKind::FnRef(k) => format!("(fnref {k})"),
     }
 }

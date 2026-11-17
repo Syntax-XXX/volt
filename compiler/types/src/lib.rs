@@ -560,6 +560,11 @@ impl Checker {
     fn resolve(&mut self, t: &TypeRef) -> Type {
         let mut ty = match (t.name.as_str(), t.args.len()) {
             (name, 0) if self.subst.contains_key(name) => self.subst[name].clone(),
+            ("fn", _) => {
+                let ps: Vec<Type> = t.args.iter().map(|a| self.resolve(a)).collect();
+                let ret = t.ret.as_ref().map_or(Type::Void, |r| self.resolve(r));
+                Type::Fn(ps, Box::new(ret))
+            }
             ("", _) => Type::Void,
             ("int", 0) => Type::Int,
             ("f64", 0) => Type::F64,
@@ -1225,7 +1230,16 @@ impl Checker {
                 (_, other) => other,
             };
         }
-        if r.args.is_empty() && gens.contains(&r.name) {
+        if r.name == "fn" {
+            if let Type::Fn(ps, ret) = &t {
+                for (ra, ta) in r.args.iter().zip(ps) {
+                    self.unify(ra, ta, gens, out);
+                }
+                if let Some(rr) = &r.ret {
+                    self.unify(rr, ret, gens, out);
+                }
+            }
+        } else if r.args.is_empty() && gens.contains(&r.name) {
             match out.get(&r.name) {
                 Some(Type::Int) if t == Type::F64 => {
                     out.insert(r.name.clone(), Type::F64); // int und f64 gemischt → f64
@@ -1340,6 +1354,13 @@ impl Checker {
                                 self.err(Diag::new(span, format!("`{key}` gehört zum Typ, nicht zu einem Wert")).tip(format!("rufe sie mit `{key}(…)` auf")));
                                 (ExprKind::Int(0), Type::Unknown)
                             }
+                            None if self.structs.get(k).and_then(|fs| fs.iter().find(|f| f.name == name)).is_some_and(|f| matches!(f.ty, Type::Fn(..))) => {
+                                let Some(Type::Fn(ps, ret)) = self.structs.get(k).and_then(|fs| fs.iter().find(|f| f.name == name)).map(|f| f.ty.clone()) else { unreachable!() };
+                                let field = Expr { kind: ExprKind::Field(recv, name.clone()), span, ty: Type::Fn(ps.clone(), ret.clone()) };
+                                let mut all = vec![field];
+                                all.extend(self.call_args(&name, &ps, args, span));
+                                (ExprKind::Invoke { target: Target::Indirect, args: all }, *ret)
+                            }
                             None => {
                                 let mut d = Diag::new(span, format!("`{k}` hat keine Methode `{name}`"));
                                 if self.structs.get(k).is_some_and(|fs| fs.iter().any(|f| f.name == name)) {
@@ -1371,17 +1392,23 @@ impl Checker {
                     },
                 };
             }
-            // Aufruf einer Variablen oder eines Ausdrucks
-            let name = text(&callee);
-            let mut d = Diag::new(span, format!("die Funktion `{name}` gibt es nicht"));
-            if matches!(callee.kind, ExprKind::Ident(_)) {
-                d = d.tip(format!("`{name}` ist eine Variable, keine Funktion"));
+            // Aufruf einer Variablen mit Funktionstyp: `f(1, 2)`
+            {
+                let mut callee = callee;
+                if let Type::Fn(ps, ret) = self.expr(&mut callee) {
+                    let name = text(&callee);
+                    let mut all = vec![callee];
+                    all.extend(self.call_args(&name, &ps, args, span));
+                    return (ExprKind::Invoke { target: Target::Indirect, args: all }, *ret);
+                }
+                // keine Funktion: unten die übliche Meldung
+                let name = text(&callee);
+                self.err(Diag::new(span, format!("die Funktion `{name}` gibt es nicht")).tip(format!("`{name}` ist eine Variable, keine Funktion")));
+                for mut a in args {
+                    self.value(&mut a.value);
+                }
+                return (ExprKind::Int(0), Type::Unknown);
             }
-            self.err(d);
-            for mut a in args {
-                self.value(&mut a.value);
-            }
-            return (ExprKind::Int(0), Type::Unknown);
         }
         let segs = self.path(&callee).expect("oben geprüft");
         let shown = segs.join(".");
@@ -1470,6 +1497,12 @@ impl Checker {
                 None => {
                     let mut d = Diag::new(span, format!("`{name}` gibt es hier nicht"));
                     match self.resolve_path(&[name.clone()]) {
+                        PathRes::Fn(key) if !self.generics.contains_key(&key) && self.fns.get(&key).is_some_and(|sg| sg.this.is_none()) => {
+                            let sg = self.fns[&key].clone();
+                            e.kind = ExprKind::FnRef(key);
+                            e.ty = Type::Fn(sg.params, Box::new(sg.ret));
+                            return e.ty.clone();
+                        }
                         PathRes::Fn(_) => d = d.tip(format!("`{name}` ist eine Funktion – rufe sie mit `{name}(…)` auf")),
                         PathRes::Type(..) => d = d.tip(format!("`{name}` ist ein Typ – einen Wert erzeugst du mit `{name}(…)`")),
                         PathRes::Module => d = d.tip(format!("`{name}` ist ein Modul – nutze `{name}.name`")),
@@ -1490,6 +1523,12 @@ impl Checker {
                     return e.ty.clone();
                 }
                 match self.resolve_path(&segs) {
+                    PathRes::Fn(key) if !self.generics.contains_key(&key) && self.fns.get(&key).is_some_and(|sg| sg.this.is_none()) => {
+                        let sg = self.fns[&key].clone();
+                        e.kind = ExprKind::FnRef(key);
+                        e.ty = Type::Fn(sg.params, Box::new(sg.ret));
+                        return e.ty.clone();
+                    }
                     PathRes::Variant(key, index) if self.variants[&key][index].1.is_empty() => {
                         e.kind = ExprKind::Variant { key: key.clone(), index, args: Vec::new() };
                         Type::Enum(key)
@@ -1648,7 +1687,7 @@ impl Checker {
                 }
             }
             // Schon aufgelöst (z. B. Standardwerte, die zweimal geprüft würden).
-            ExprKind::Invoke { .. } | ExprKind::Variant { .. } | ExprKind::Wrap(_) => e.ty.clone(),
+            ExprKind::Invoke { .. } | ExprKind::Variant { .. } | ExprKind::Wrap(_) | ExprKind::FnRef(_) => e.ty.clone(),
         };
         if let Some(k) = rewrite {
             e.kind = k;

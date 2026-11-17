@@ -87,6 +87,77 @@ fn eindeutig[T](xs: List[T]) -> List[T]
             out.push(x)
     return out
 
+# Sortiert mit eigener Reihenfolge: `kleiner(a, b)` ist wahr, wenn a vor b stehen soll (stabil).
+fn sortiere_mit[T](xs: List[T], kleiner: fn(T, T) -> bool)
+    let n = xs.len()
+    if n < 2
+        return
+    let puffer = List[T]()
+    for i in 0..n
+        puffer.push(xs[0])
+    var breite = 1
+    while breite < n
+        var links = 0
+        while links < n
+            let mitte = min(links + breite, n)
+            let rechts = min(links + 2 * breite, n)
+            var i = links
+            var j = mitte
+            var k = links
+            while i < mitte and j < rechts
+                if kleiner(xs[j], xs[i])
+                    puffer[k] = xs[j]
+                    j += 1
+                else
+                    puffer[k] = xs[i]
+                    i += 1
+                k += 1
+            while i < mitte
+                puffer[k] = xs[i]
+                i += 1
+                k += 1
+            while j < rechts
+                puffer[k] = xs[j]
+                j += 1
+                k += 1
+            links += 2 * breite
+        for t in 0..n
+            xs[t] = puffer[t]
+        breite *= 2
+
+# Neue Liste: `f` auf jedes Element angewendet.
+fn abbilden[T, U](xs: List[T], f: fn(T) -> U) -> List[U]
+    let out = List[U]()
+    for x in xs
+        out.push(f(x))
+    return out
+
+# Neue Liste mit den Elementen, für die `behalte` wahr ist.
+fn filtere[T](xs: List[T], behalte: fn(T) -> bool) -> List[T]
+    let out = List[T]()
+    for x in xs
+        if behalte(x)
+            out.push(x)
+    return out
+
+# Faltet die Liste von links: acc = f(acc, element), beginnend bei `start`.
+fn falte[T, A](xs: List[T], start: A, f: fn(A, T) -> A) -> A
+    var acc = start
+    for x in xs
+        acc = f(acc, x)
+    return acc
+
+fn fuer_jedes[T](xs: List[T], f: fn(T))
+    for x in xs
+        f(x)
+
+# Erstes Element, für das `passt` wahr ist.
+fn finde[T](xs: List[T], passt: fn(T) -> bool) -> T?
+    for x in xs
+        if passt(x)
+            return x
+    return none
+
 test "sortiere zahlen"
     let xs = [5, 3, 9, 1, 3, 7, 2, 8, 6, 4, 0]
     sortiere(xs)
@@ -112,3 +183,24 @@ test "kleinstes groesstes eindeutig"
     assert(groesstes(xs).or(-1) == 9)
     assert(kleinstes(List[int]()).or(-1) == -1)
     assert(eindeutig(xs).len() == 3)
+
+fn __doppelt(x: int) -> int
+    return x * 2
+
+fn __gerade(x: int) -> bool
+    return x % 2 == 0
+
+fn __plus(a: int, b: int) -> int
+    return a + b
+
+fn __absteigend(a: int, b: int) -> bool
+    return a > b
+
+test "funktionen hoeherer ordnung"
+    let xs = [1, 2, 3, 4]
+    assert(abbilden(xs, __doppelt).len() == 4 and abbilden(xs, __doppelt)[3] == 8)
+    assert(filtere(xs, __gerade).len() == 2)
+    assert(falte(xs, 0, __plus) == 10)
+    assert(finde(xs, __gerade).or(0) == 2)
+    sortiere_mit(xs, __absteigend)
+    assert(xs[0] == 4 and xs[3] == 1)

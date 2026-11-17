@@ -87,9 +87,11 @@ fn emit_mode(mods: &[&Module], mode: Mode) -> String {
     init += "}\n";
     let main_ret = mods[0].fns.iter().find(|f| f.name == "main").map(|f| f.ret.clone()).unwrap_or(Type::Void);
     let test_keys: Vec<String> = mods.iter().flat_map(|m| m.tests.iter().filter_map(|t| m.fns.iter().find(|f| f.name == t.1).map(|f| fname(&f.key)))).collect();
-    let has_event = mods[0].fns.iter().any(|f| f.name == "ereignis" && f.params.len() == 1 && f.params[0].ty == Type::Int && f.ret == Type::Void);
+    let has_user_event = mods[0].fns.iter().any(|f| f.name == "ereignis" && f.params.len() == 1 && f.params[0].ty == Type::Int && f.ret == Type::Void);
+    let web_dispatch = mods.iter().flat_map(|m| m.fns.iter()).any(|f| f.key == "web.fuehre_aus");
+    let has_event = has_user_event || web_dispatch;
     let main = if mode == Mode::Web {
-        let event = if has_event { "\n__attribute__((export_name(\"volt_event\"))) void volt_event(int id) {\n    v_ereignis((int64_t)id);\n}\n" } else { "" };
+        let event = if has_event { &format!("\n__attribute__((export_name(\"volt_event\"))) void volt_event(int id) {{\n{}{}}}\n", if web_dispatch { format!("    if (id >= 100000) {{ {}((int64_t)id); return; }}\n", fname("web.fuehre_aus")) } else { String::new() }, if has_user_event { "    v_ereignis((int64_t)id);\n" } else { "" }) } else { "" };
         format!("\n__attribute__((export_name(\"volt_start\"))) void volt_start(void) {{\n    volt_init();\n    v_main();\n}}\n{event}")
     } else if tests {
         let cases: String = test_keys.iter().enumerate().map(|(i, k)| format!("        case {i}: {k}(); break;\n")).collect();
@@ -138,6 +140,7 @@ fn tm(t: &Type) -> String {
         Type::List(_) => "L".into(),
         Type::Map(..) => "M".into(),
         Type::Struct(k) | Type::Enum(k) => format!("S{}", mangle(k)),
+        Type::Fn(ps, r) => format!("F{}_{}", ps.iter().map(tm).collect::<Vec<_>>().join(""), tm(r)),
         Type::Opt(t) => format!("O{}", tm(t)),
         Type::Res(t) => format!("R{}", tm(t)),
         _ => "void".into(),
@@ -164,6 +167,7 @@ fn c_string(text: &str) -> String {
 fn has_call(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Invoke { .. } | ExprKind::Try(_) | ExprKind::Index(..) | ExprKind::List(_) | ExprKind::Call { .. } => true,
+        ExprKind::FnRef(_) => false,
         ExprKind::Unary(_, x) | ExprKind::Field(x, _) | ExprKind::Wrap(x) => has_call(x),
         ExprKind::Binary(_, l, r) => has_call(l) || has_call(r),
         ExprKind::Variant { args, .. } => args.iter().any(has_call),
@@ -251,6 +255,16 @@ impl<'a> Gen<'a> {
                         let it = self.ctype(inner);
                         self.types += &format!("typedef struct {{ bool ok; {it} val; volt_str err; }} {name};\n");
                     }
+                }
+                name
+            }
+            Type::Fn(ps, r) => {
+                let name = format!("volt_fn_{}", tm(t));
+                if self.done.insert(name.clone()) {
+                    let params: Vec<String> = ps.iter().map(|p| self.ctype(p)).collect();
+                    let params = if params.is_empty() { "void".to_string() } else { params.join(", ") };
+                    let rt = self.ctype(r);
+                    self.types += &format!("typedef {rt} (*{name})({params});\n");
                 }
                 name
             }
@@ -588,6 +602,7 @@ impl<'a> Gen<'a> {
             ExprKind::Float(x) => format!("{x:?}"),
             ExprKind::Bool(b) => b.to_string(),
             ExprKind::None => "0".into(),
+            ExprKind::FnRef(key) => self.externs.get(key).cloned().unwrap_or_else(|| fname(key)),
             ExprKind::Ident(name) if name == "self" && self.mut_self => "(*v_self)".into(),
             ExprKind::Ident(name) => format!("v_{name}"),
             ExprKind::Str(segs) => {
@@ -734,6 +749,10 @@ impl<'a> Gen<'a> {
                 }
                 let ops = self.ops(args);
                 self.seq(ops, |v| format!("(({st}){{{}}})", v.join(", ")))
+            }
+            Target::Indirect => {
+                let ops = self.ops(args);
+                self.seq(ops, |v| format!("({})({})", v[0], v[1..].join(", ")))
             }
             Target::Builtin(name) => self.builtin(e, name, args),
             Target::BuiltinMethod(id) => self.builtin_method(e, id, args, line),

@@ -469,8 +469,28 @@ impl Parser {
     /// `int`, `modul.Typ`, `List[int]`, `Map[str, int]`, jeweils mit `?`/`!` dahinter; `!` allein heißt „nichts oder Fehler“.
     fn type_ref(&mut self) -> R<TypeRef> {
         let span = self.span();
+        // Funktionstyp: `fn(int, str) -> bool`
+        if self.eat(&Tok::Fn) {
+            self.expect(Tok::LParen)?;
+            let mut args = Vec::new();
+            while !self.at(&Tok::RParen) {
+                args.push(self.type_ref()?);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(Tok::RParen)?;
+            let ret = if self.eat(&Tok::Arrow) { Some(Box::new(self.type_ref()?)) } else { None };
+            let mut suffix = Vec::new();
+            while self.at(&Tok::Question) {
+                self.i += 1;
+                suffix.push('?');
+            }
+            let end = self.toks[self.i - 1].span;
+            return Ok(TypeRef { name: "fn".into(), args, ret, suffix, span: join(span, end) });
+        }
         if self.eat(&Tok::Bang) {
-            return Ok(TypeRef { name: String::new(), args: Vec::new(), suffix: vec!['!'], span });
+            return Ok(TypeRef { name: String::new(), args: Vec::new(), ret: None, suffix: vec!['!'], span });
         }
         let (mut name, _) = self.ident("einen Typ")?;
         while self.eat(&Tok::Dot) {
@@ -497,7 +517,7 @@ impl Parser {
             }
         }
         let end = self.toks[self.i - 1].span;
-        Ok(TypeRef { name, args, suffix, span: join(span, end) })
+        Ok(TypeRef { name, args, ret: None, suffix, span: join(span, end) })
     }
 
     /// Zeilenende, dann die eingerückten Anweisungen bis zum Ende des Blocks.

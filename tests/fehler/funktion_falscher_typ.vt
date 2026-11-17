@@ -1,0 +1,8 @@
+fn zwei(x: int) -> int
+    return x * 2
+
+fn nimm(f: fn(str) -> str)
+    print(f("a"))
+
+fn main()
+    nimm(zwei)
