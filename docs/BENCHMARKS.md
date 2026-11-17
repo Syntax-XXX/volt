@@ -8,7 +8,7 @@ Gemessen am 17.11.2026 auf pve2 (Intel, 8 Kerne, belegt durch laufende VMs – d
 | fib(35), rekursiv | 34 ms | 153 ms | 26 ms | 63 ms | 2 072 ms |
 | Sieb 5 Mio. (`List[bool]`) | 74 ms | 250 ms | 52 ms | 56 ms | 2 001 ms |
 | N-Body, 200 000 Schritte (`List[Body]`) | 30 ms | 296 ms | 36 ms | – | 1 842 ms |
-| 500 000 Strings bauen | 178 ms | 224 ms | 78 ms | 160 ms | 228 ms |
+| 500 000 Strings bauen | 91 ms | 224 ms | 78 ms | 160 ms | 228 ms |
 
 Stand nach dem Müllsammler (Messung wie oben; vor dem Sammler waren es fib 30, Sieb 51, N-Body 22, Strings 154 ms – der Unterschied liegt überwiegend im Messrauschen, beim Sieb kostet das Durchsuchen der 5-MB-Liste beim Sammeln ca. 20 ms).
 
@@ -25,4 +25,4 @@ Der Verbrauch bleibt bei steigender Menge flach: Der Müllsammler räumt alle 8 
 
 ## Was die Zahlen zeigen
 - **Zahlen und Schleifen:** Volt `--release` liegt auf C-Niveau, weil es C ist. Debug mit tcc ist 4–12× langsamer, übersetzt dafür in ~15 ms.
-- **Strings** sind noch 2× langsamer als C (Formatierung über `volt_fmt` mit va_args, jede Einfügung ein eigener Block). Hier steckt als Nächstes das meiste Potenzial: Platz vorab berechnen statt wachsen lassen.
+- **Strings** liegen bei 91 ms gegen 78 ms C (vorher 178 ms): Text-Blöcke werden nicht genullt und beim Sammeln nicht durchsucht (sie enthalten keine Zeiger), Zahlen werden ohne `snprintf` geschrieben. 5 Mio. Strings: 0,75 s statt 1,77 s.

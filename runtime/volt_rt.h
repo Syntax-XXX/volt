@@ -22,7 +22,7 @@ static void volt_panic(const char* msg, int line) {
 // shortcut: Phase 3 räumt per GC auf statt per Ownership/Ref-Counting im Compiler. Der Sammler sucht Zeiger auf dem Stack,
 // in den Registern und in allen lebenden Blöcken (jedes Wort, das in einen Block zeigt, hält ihn am Leben, auch Zeiger ins Innere).
 // Läuft nur beim Reservieren (kein Hintergrund-Thread), Pausen ~1 ms je 8 MB neuer Daten. Upgrade: Compiler-seitige Besitzanalyse.
-typedef struct { size_t n; size_t mark; } volt_hdr;  // steht vor jedem Block (16 Bytes, Daten bleiben 16-ausgerichtet)
+typedef struct { size_t n; size_t mark; } volt_hdr;  // steht vor jedem Block (16 Bytes, Daten bleiben 16-ausgerichtet); mark: Bit 0 = erreicht, Bit 1 = ohne Zeiger (Text)
 static volt_hdr** volt_blks;
 static size_t volt_nblk, volt_cblk, volt_since, volt_limit = (size_t)8 << 20;
 static char* volt_stack_base;
@@ -46,8 +46,9 @@ static void volt_mark_word(uintptr_t w) {
         if (w < start) hi = mid;
         else if (w >= start + sizeof(volt_hdr) + volt_blks[mid]->n) lo = mid + 1;
         else {
-            if (!volt_blks[mid]->mark) {
-                volt_blks[mid]->mark = 1;
+            if (!(volt_blks[mid]->mark & 1)) {
+                volt_blks[mid]->mark |= 1;
+                if (volt_blks[mid]->mark & 2) return;  // Text enthält keine Zeiger
                 if (volt_nmark == volt_cmark) {
                     volt_cmark = volt_cmark ? volt_cmark * 2 : 1024;
                     volt_mstack = realloc(volt_mstack, volt_cmark * sizeof *volt_mstack);
@@ -86,7 +87,7 @@ static void volt_gc_collect(void) {
     size_t live = 0, j = 0;
     for (size_t i = 0; i < volt_nblk; i++) {
         volt_hdr* h = volt_blks[i];
-        if (h->mark) { h->mark = 0; live += h->n; volt_blks[j++] = h; }
+        if (h->mark & 1) { h->mark &= ~(size_t)1; live += h->n; volt_blks[j++] = h; }
         else free(h);
     }
     volt_nblk = j;
@@ -94,15 +95,17 @@ static void volt_gc_collect(void) {
     volt_limit = live * 2 > ((size_t)8 << 20) ? live * 2 : ((size_t)8 << 20);
 }
 
-// Neuer, genullter Block; `old` (aus volt_realloc) wird hineinkopiert. Der alte Block wird beim nächsten Lauf eingesammelt.
-static void* volt_realloc(void* old, size_t n) {
+// Neuer Block; `old` (aus volt_realloc) wird hineinkopiert, der alte wird beim nächsten Lauf eingesammelt.
+// `atomic`: Text ohne Zeiger – wird nicht genullt (der Aufrufer füllt ihn) und beim Sammeln nicht durchsucht.
+static void* volt_alloc(void* old, size_t n, int atomic) {
     if (n == 0) n = 1;
     volt_since += n;
     if (volt_since > volt_limit) volt_gc_collect();
-    volt_hdr* h = calloc(1, sizeof(volt_hdr) + n);
-    if (!h) { volt_gc_collect(); h = calloc(1, sizeof(volt_hdr) + n); }
+    volt_hdr* h = atomic ? malloc(sizeof(volt_hdr) + n) : calloc(1, sizeof(volt_hdr) + n);
+    if (!h) { volt_gc_collect(); h = atomic ? malloc(sizeof(volt_hdr) + n) : calloc(1, sizeof(volt_hdr) + n); }
     if (!h) volt_panic("kein Speicher mehr frei", 0);
     h->n = n;
+    h->mark = atomic ? 2 : 0;
     if (volt_nblk == volt_cblk) {
         volt_cblk = volt_cblk ? volt_cblk * 2 : 4096;
         volt_blks = realloc(volt_blks, volt_cblk * sizeof *volt_blks);
@@ -112,6 +115,7 @@ static void* volt_realloc(void* old, size_t n) {
     if (old) { size_t on = ((volt_hdr*)old - 1)->n; memcpy(h + 1, old, on < n ? on : n); }
     return h + 1;
 }
+static void* volt_realloc(void* old, size_t n) { return volt_alloc(old, n, 0); }
 
 // Kürzeste Schreibweise, die beim Einlesen wieder genau denselben Wert ergibt (wie Python):
 // 0.1 statt 0.10000000000000001, aber immer als Kommazahl erkennbar (4.0, nicht 4).
@@ -137,9 +141,19 @@ static void volt_print_f64(double v) {
 }
 
 // Baut einen String aus Teilen. `tags` nennt je Argument den Typ: s = str, i = int, f = f64, b = bool.
+// Ganzzahl → Text ohne snprintf; schreibt rückwärts ans Ende von buf[32] und gibt den Anfang zurück.
+static char* volt_itoa(int64_t v, char buf[32]) {
+    char* p = buf + 31;
+    *p = 0;
+    uint64_t u = v < 0 ? 0 - (uint64_t)v : (uint64_t)v;
+    do { *--p = (char)('0' + u % 10); u /= 10; } while (u);
+    if (v < 0) *--p = '-';
+    return p;
+}
+
 static volt_str volt_fmt(const char* tags, ...) {
     size_t len = 0, cap = 64;
-    char* out = volt_realloc(NULL, cap);
+    char* out = volt_alloc(NULL, cap, 1);
     va_list ap;
     va_start(ap, tags);
     for (; out && *tags; tags++) {
@@ -147,14 +161,14 @@ static volt_str volt_fmt(const char* tags, ...) {
         const char* part = num;
         switch (*tags) {
             case 's': part = va_arg(ap, volt_str); break;
-            case 'i': snprintf(num, sizeof num, "%" PRId64, va_arg(ap, int64_t)); break;
+            case 'i': part = volt_itoa(va_arg(ap, int64_t), num); break;
             case 'f': volt_f64_text(va_arg(ap, double), num); break;
             default: part = va_arg(ap, int) ? "true" : "false";
         }
         size_t n = strlen(part);
         if (len + n + 1 > cap) {
             cap = (len + n + 1) * 2;
-            out = volt_realloc(out, cap);
+            out = volt_alloc(out, cap, 1);
         }
         memcpy(out + len, part, n);
         len += n;
@@ -181,7 +195,7 @@ static int64_t volt_mod(int64_t a, int64_t b, int line) {
 
 
 static char* volt_str_alloc(size_t n) {  // n Bytes plus Endnull
-    char* s = volt_realloc(NULL, n + 1);
+    char* s = volt_alloc(NULL, n + 1, 1);
     s[n] = 0;
     return s;
 }
@@ -424,10 +438,10 @@ static bool volt_input(volt_str prompt, volt_str* out) {
     fputs(prompt, stdout);
     fflush(stdout);
     size_t len = 0, cap = 64;
-    char* buf = volt_realloc(NULL, cap);
+    char* buf = volt_alloc(NULL, cap, 1);
     int c;
     while ((c = getchar()) != EOF && c != '\n') {
-        if (len + 1 >= cap) buf = volt_realloc(buf, cap *= 2);
+        if (len + 1 >= cap) buf = volt_alloc(buf, cap *= 2, 1);
         buf[len++] = (char)c;
     }
     if (c == EOF && !len) return false;
