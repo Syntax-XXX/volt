@@ -417,10 +417,12 @@ impl Lexer {
                 Some('\\') => lit.push(match self.bump() {
                     Some('n') => '\n',
                     Some('t') => '\t',
+                    Some('r') => '\r',
+                    Some('e') => '\x1b',
                     Some(c @ ('\\' | '"' | '{' | '}')) => c,
                     _ => {
                         return Err(Diag::new(Span { len: 2, ..at }, "dieses Escape gibt es nicht")
-                            .tip("erlaubt sind \\n, \\t, \\\\, \\\", \\{ und \\}"));
+                            .tip("erlaubt sind \\n, \\t, \\r, \\e (ESC), \\\\, \\\", \\{ und \\}"));
                     }
                 }),
                 Some('{') => {

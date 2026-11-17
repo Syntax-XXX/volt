@@ -177,16 +177,19 @@ fn functions(text: &str) -> Vec<CFunc> {
     found
 }
 
-const TYPE_WORDS: &[&str] = &["int", "long", "short", "char", "double", "float", "unsigned", "signed", "void", "_Bool", "bool", "size_t", "ssize_t", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "intptr_t", "uintptr_t", "time_t", "off_t"];
+/// Ganzzahl-Typnamen aus C (inklusive der üblichen typedefs) – alle werden in Volt zu `int`.
+const INT_NAMES: &[&str] = &["int", "long", "short", "char", "size_t", "ssize_t", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "intptr_t", "uintptr_t", "time_t", "off_t", "useconds_t", "suseconds_t", "pid_t", "uid_t", "gid_t", "mode_t", "socklen_t", "clock_t", "wint_t", "ptrdiff_t"];
+const TYPE_WORDS: &[&str] = &["double", "float", "unsigned", "signed", "void", "_Bool", "bool"];
 
 /// Typ aus C-Text; `ret` = Rückgabe (dort ist `void` erlaubt und kein Parametername zu entfernen).
 fn ctype(text: &str, ret: bool) -> Option<Type> {
     let spaced = text.replace('*', " * ");
-    let mut words: Vec<&str> = spaced.split_whitespace().filter(|w| !matches!(*w, "const" | "volatile" | "register")).collect();
+    // glibc schreibt Typen intern mit Unterstrichen (`__useconds_t`, `__off_t`): für den Vergleich weglassen
+    let mut words: Vec<&str> = spaced.split_whitespace().filter(|w| !matches!(*w, "const" | "volatile" | "register")).map(|w| if w.starts_with("__") && INT_NAMES.contains(&w.trim_start_matches('_')) { w.trim_start_matches('_') } else { w }).collect();
     let stars = words.iter().filter(|w| **w == "*").count();
     words.retain(|w| *w != "*");
     // `double x` → Parametername entfernen (aber nicht bei `unsigned int` oder `long long`)
-    if !ret && words.len() > 1 && !TYPE_WORDS.contains(words.last().unwrap()) {
+    if !ret && words.len() > 1 && !TYPE_WORDS.contains(words.last().unwrap()) && !INT_NAMES.contains(words.last().unwrap()) {
         words.pop();
     }
     if words.is_empty() {
@@ -194,7 +197,7 @@ fn ctype(text: &str, ret: bool) -> Option<Type> {
     }
     let base: Vec<&str> = words.iter().copied().filter(|w| !matches!(*w, "unsigned" | "signed")).collect();
     let base = if base.is_empty() { vec!["int"] } else { base };
-    let all_ints = base.iter().all(|w| matches!(*w, "int" | "long" | "short" | "char" | "size_t" | "ssize_t" | "int8_t" | "int16_t" | "int32_t" | "int64_t" | "uint8_t" | "uint16_t" | "uint32_t" | "uint64_t" | "intptr_t" | "uintptr_t" | "time_t" | "off_t"));
+    let all_ints = base.iter().all(|w| INT_NAMES.contains(w));
     match stars {
         0 if base == ["void"] => ret.then_some(Type::Void),
         0 if base.iter().all(|w| matches!(*w, "double" | "float" | "long")) && base.iter().any(|w| matches!(*w, "double" | "float")) => Some(Type::F64),
@@ -242,6 +245,9 @@ mod tests {
         assert_eq!(ctype("double x", false), Some(Type::F64));
         assert_eq!(ctype("unsigned int", false), Some(Type::Int));
         assert_eq!(ctype("long long n", false), Some(Type::Int));
+        assert_eq!(ctype("useconds_t us", false), Some(Type::Int));
+        assert_eq!(ctype("pid_t", true), Some(Type::Int));
+        assert_eq!(ctype("__useconds_t __us", false), Some(Type::Int));
         assert_eq!(ctype("const char *s", false), Some(Type::Str));
         assert_eq!(ctype("void", true), Some(Type::Void));
         assert_eq!(ctype("void", false), None);

@@ -1,0 +1,88 @@
+# Snake im Terminal – spielt sich selbst (die Schlange steuert auf das Futter zu und meidet Wand und sich selbst).
+# Zeigt: struct, List, C-Import (usleep, isatty), eigene Zufallszahlen, Spiel-Schleife.
+import c "unistd.h" as u
+
+struct Pos
+    x: int
+    y: int
+
+    op ==(self, o: Pos) -> bool
+        return self.x == o.x and self.y == o.y
+
+fn zufall(seed: int) -> int
+    return (seed * 1103515245 + 12345) % 2147483648
+
+fn belegt(koerper: List[Pos], p: Pos) -> bool
+    for k in koerper
+        if k == p
+            return true
+    return false
+
+fn zeichne(koerper: List[Pos], futter: Pos, punkte: int, w: int, h: int)
+    var bild = ""
+    for y in 0..h
+        var zeile = ""
+        for x in 0..w
+            let p = Pos(x, y)
+            if p == koerper[0]
+                zeile = "{zeile}@"
+            else if belegt(koerper, p)
+                zeile = "{zeile}o"
+            else if p == futter
+                zeile = "{zeile}*"
+            else
+                zeile = "{zeile}."
+        bild = "{bild}{zeile}\n"
+    print("{bild}Punkte: {punkte}")
+
+fn main()
+    let w = 16
+    let h = 8
+    let koerper = [Pos(3, 4), Pos(2, 4), Pos(1, 4)]
+    var seed = 42
+    var futter = Pos(10, 2)
+    var punkte = 0
+    let tty = u.isatty(1) != 0
+    var runde = 0
+    while runde < 400
+        runde += 1
+        # beste sichere Richtung zum Futter wählen
+        let kopf = koerper[0]
+        var beste = Pos(-1, -1)
+        var abstand = 1000
+        for d in 0..4
+            var n = Pos(kopf.x, kopf.y)
+            if d == 0
+                n = Pos(kopf.x + 1, kopf.y)
+            else if d == 1
+                n = Pos(kopf.x - 1, kopf.y)
+            else if d == 2
+                n = Pos(kopf.x, kopf.y + 1)
+            else
+                n = Pos(kopf.x, kopf.y - 1)
+            if n.x < 0 or n.y < 0 or n.x >= w or n.y >= h or belegt(koerper, n)
+                continue
+            let a = abs(n.x - futter.x) + abs(n.y - futter.y)
+            if a < abstand
+                abstand = a
+                beste = n
+        if abstand == 1000
+            print("Schlange steckt fest nach {runde} Runden – {punkte} Punkte")
+            return
+        koerper.insert(0, beste)
+        if beste == futter
+            punkte += 1
+            while belegt(koerper, futter)
+                seed = zufall(seed)
+                let fx = seed / 7 % w
+                seed = zufall(seed)
+                futter = Pos(fx, seed / 7 % h)
+        else
+            koerper.pop()
+        if tty
+            print("\e[2J\e[H")
+            zeichne(koerper, futter, punkte, w, h)
+            u.usleep(60000)
+        else if runde % 100 == 0
+            zeichne(koerper, futter, punkte, w, h)
+    print("Fertig: {punkte} Punkte in {runde} Runden")

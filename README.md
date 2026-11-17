@@ -22,6 +22,10 @@ print("Summe = {summe}")
 
 `struct` mit Methoden, `enum` mit Daten und `match`, Optionals `T?`, Fehler `T!` mit `?`, `List`, `Map`, String-Funktionen, Module mit `use`. Meilenstein: [examples/abenteuer.vt](examples/abenteuer.vt), ein Textadventure komplett in Volt (`volt run examples/abenteuer.vt`).
 
+## Spiele und C (Phase 4, Stand)
+
+`import c "math.h" as m` macht Funktionen und Zahlenkonstanten jedes C-Headers nutzbar (`examples/c_mathe.vt`), Operator-Überladung (`op +`) gibt es für eigene Typen (`examples/vektoren.vt`), `volt run --watch` baut bei jeder Änderung neu, und `examples/snake.vt` ist ein Snake im Terminal, das sich selbst spielt (läuft im Terminal mit Animation). Noch offen: Structs aus Headern (nötig für raylib), `std.math` als Bibliothek, `volt new --template game`.
+
 ## Speicher und Tempo (Phase 3, Stand)
 
 Ein Müllsammler in der Runtime gibt Strings, Listen und Maps frei (5 Mio. Strings: 16 MB statt 392 MB), ein Build-Cache übersetzt unveränderte Programme nicht neu (5 ms statt 22 ms), und `bench/run.sh` vergleicht Volt mit C, Go und Python – Ergebnisse in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Noch offen: `defer`, Ownership statt GC, parallele Übersetzung.
