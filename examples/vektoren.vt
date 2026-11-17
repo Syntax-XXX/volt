@@ -1,0 +1,37 @@
+# Operator-Überladung und Mathe: ein kleiner 2D-Vektor.
+struct Vec2
+    x: f64
+    y: f64
+
+    op +(self, o: Vec2) -> Vec2
+        return Vec2(self.x + o.x, self.y + o.y)
+
+    op -(self, o: Vec2) -> Vec2
+        return Vec2(self.x - o.x, self.y - o.y)
+
+    op *(self, k: f64) -> Vec2
+        return Vec2(self.x * k, self.y * k)
+
+    op ==(self, o: Vec2) -> bool
+        return self.x == o.x and self.y == o.y
+
+    fn len(self) -> f64
+        return sqrt(self.x * self.x + self.y * self.y)
+
+    fn dreh(self, winkel: f64) -> Vec2
+        return Vec2(self.x * cos(winkel) - self.y * sin(winkel), self.x * sin(winkel) + self.y * cos(winkel))
+
+fn main()
+    let a = Vec2(3.0, 4.0)
+    let b = Vec2(1.0, 2.0)
+    let c = a + b * 2.0 - Vec2(1.0, 1.0)
+    print("c = ({c.x}, {c.y}), Länge {a.len()}")
+    print(a == Vec2(3.0, 4.0))
+    print(a == b)
+    let r = Vec2(1.0, 0.0).dreh(3.141592653589793 / 2.0)
+    print(floor(r.x + 0.5))
+    print(floor(r.y + 0.5))
+    print(pow(2.0, 10.0))
+    print(min(3, 7))
+    print(max(2.5, 1))
+    print(ceil(1.2))

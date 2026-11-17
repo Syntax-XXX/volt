@@ -12,7 +12,7 @@ use volt_types::Unit;
 const HELP: &str = "\
 volt – die Programmiersprache Volt ⚡
 
-  volt run <datei.vt>                             kompilieren und starten
+  volt run <datei.vt> [--watch]                   kompilieren und starten; mit --watch bei jeder Änderung neu (Strg+C beendet)
   volt build <datei.vt> [--release] [-o <ziel>]   Programm bauen
   volt parse <datei.vt> [--ast]                   Syntax prüfen, mit --ast den Syntaxbaum zeigen
   volt <skript.vts>                               Volt Script direkt starten (auch per `#!/usr/bin/env volt`)
@@ -28,6 +28,7 @@ fn main() -> ExitCode {
     let file = args.get(1).filter(|a| !a.starts_with('-')).map(Path::new);
     let result = match (args.first().map(String::as_str), file) {
         (Some(script), _) if script.ends_with(".vts") || script.ends_with(".vt") => run(Path::new(script)),
+        (Some("run"), Some(file)) if flag("--watch") => watch(file),
         (Some("run"), Some(file)) => run(file),
         (Some("build"), Some(file)) => {
             let out = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).map(PathBuf::from);
@@ -188,6 +189,38 @@ fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, 
     }
     eprintln!("error: kein C-Compiler gefunden\n     = tipp: installiere tcc (am schnellsten), gcc oder clang – oder setze VOLT_CC");
     Err(())
+}
+
+/// Zeitstempel aller Volt-Dateien im Ordner der Quelle – ändert er sich, hat jemand gespeichert.
+fn stamp(path: &Path) -> (usize, Option<std::time::SystemTime>) {
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let files: Vec<_> = fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("vt" | "vts"))).collect();
+    (files.len(), files.iter().filter_map(|p| fs::metadata(p).and_then(|m| m.modified()).ok()).max())
+}
+
+/// `volt run --watch`: bauen, starten, bei Änderung stoppen und neu bauen. Fehler stoppen die Schleife nicht.
+// shortcut: Neustart statt Hot-Reload mit erhaltenem Zustand, Phase 4 braucht dafür dynamisches Laden; Abfrage alle 250 ms statt inotify.
+fn watch(path: &Path) -> Result<u8, ()> {
+    let mut last = stamp(path);
+    eprintln!("[watch] beobachte {} (Strg+C beendet)", path.display());
+    loop {
+        let mut child = match compile(path, false, None) {
+            Ok(bin) => Command::new(&bin).spawn().map_err(|e| eprintln!("error: `{}` lässt sich nicht starten: {e}", bin.display())).ok(),
+            Err(()) => {
+                eprintln!("[watch] Fehler – warte auf die nächste Änderung");
+                None
+            }
+        };
+        while stamp(path) == last {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        last = stamp(path);
+        if let Some(c) = child.as_mut() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        eprintln!("[watch] Änderung erkannt – neu bauen");
+    }
 }
 
 fn run(path: &Path) -> Result<u8, ()> {

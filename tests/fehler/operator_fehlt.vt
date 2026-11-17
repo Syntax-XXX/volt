@@ -1,0 +1,6 @@
+struct V
+    x: int
+
+fn main()
+    let a = V(1)
+    let b = a + a

@@ -49,7 +49,7 @@ struct Var {
 }
 
 /// Eingebaute Funktionen – diese Namen sind für eigene Funktionen tabu.
-const BUILTINS: &[&str] = &["print", "input", "error", "int", "float", "sqrt", "abs", "exit"];
+const BUILTINS: &[&str] = &["print", "input", "error", "int", "float", "sqrt", "abs", "exit", "sin", "cos", "tan", "exp", "log", "floor", "ceil", "pow", "atan2", "min", "max"];
 const TYPE_NAMES: &[&str] = &["int", "f64", "bool", "str", "List", "Map"];
 
 /// Wozu ein Name wie `modul.Typ.Fall` gehört.
@@ -974,6 +974,18 @@ impl Checker {
             "float" => (vec![Int], F64),
             "sqrt" => (vec![F64], F64),
             "exit" => (vec![Int], Void),
+            "sin" | "cos" | "tan" | "exp" | "log" | "floor" | "ceil" => (vec![F64], F64),
+            "pow" | "atan2" => (vec![F64, F64], F64),
+            "min" | "max" => {
+                let out = self.call_args(name, &[Unknown, Unknown], args, span);
+                let ty = match (out.first().map(|a| a.ty.clone()), out.get(1).map(|a| a.ty.clone())) {
+                    (Some(Int), Some(Int)) => Int,
+                    (Some(a), Some(b)) if a.is_num() && b.is_num() => F64,
+                    (Some(Unknown), _) | (_, Some(Unknown)) => Unknown,
+                    _ => { self.err(Diag::new(span, format!("`{name}` braucht zwei Zahlen"))); Unknown }
+                };
+                return (out, ty);
+            }
             _ /* abs */ => {
                 let out = self.call_args(name, &[Unknown], args, span);
                 let ty = out.first().map(|a| a.ty.clone()).unwrap_or(Unknown);
@@ -1107,6 +1119,7 @@ impl Checker {
     fn expr(&mut self, e: &mut Expr) -> Type {
         let span = e.span;
         let path = if matches!(e.kind, ExprKind::Field(..)) { self.path(e) } else { None };
+        let mut rewrite: Option<ExprKind> = None;
         e.ty = match &mut e.kind {
             ExprKind::Int(_) => Type::Int,
             ExprKind::Float(_) => Type::F64,
@@ -1260,7 +1273,22 @@ impl Checker {
             ExprKind::Binary(op, l, r) => {
                 let (lt, rt) = (self.value(l), self.value(r));
                 let op = *op;
-                self.binary(op, &lt, &rt, span)
+                // `a + b` auf einem Struct: Methode `op+` des Typs (Operator-Überladung)
+                let user = match &lt {
+                    Type::Struct(k) | Type::Enum(k) if !matches!(op, BinOp::And | BinOp::Or) => {
+                        self.fns.get(&format!("{k}.op{}", op.sym())).filter(|sg| sg.this.is_some() && sg.params.len() == 1 && Self::fits(&sg.params[0], &rt)).map(|sg| (format!("{k}.op{}", op.sym()), sg.params[0].clone(), sg.ret.clone()))
+                    }
+                    _ => None,
+                };
+                if let Some((key, param, ret)) = user {
+                    let hole = |e: &mut Expr| std::mem::replace(e, Expr { kind: ExprKind::Bool(false), span, ty: Type::Unknown });
+                    let (a, mut b) = (hole(l), hole(r));
+                    self.coerce(&mut b, &param, |_, _| String::new());
+                    rewrite = Some(ExprKind::Invoke { target: Target::Method { key, this: SelfKind::Value }, args: vec![a, b] });
+                    ret
+                } else {
+                    self.binary(op, &lt, &rt, span)
+                }
             }
             ExprKind::Call { .. } => {
                 let ExprKind::Call { callee, args } = take(e) else { unreachable!() };
@@ -1271,6 +1299,9 @@ impl Checker {
             // Schon aufgelöst (z. B. Standardwerte, die zweimal geprüft würden).
             ExprKind::Invoke { .. } | ExprKind::Variant { .. } | ExprKind::Wrap(_) => e.ty.clone(),
         };
+        if let Some(k) = rewrite {
+            e.kind = k;
+        }
         e.ty.clone()
     }
 

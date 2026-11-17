@@ -65,7 +65,8 @@ match wert
 - Ein `T!`-Ergebnis darf nicht still verworfen werden (`f()?` oder `let _ = f() else err`).
 
 ## Eingebaut
-- Funktionen: `print(x)`, `input(prompt) -> str?`, `error(text)`, `int(f64)`, `float(int)`, `sqrt`, `abs`, `exit(code)`.
+- Funktionen: `print(x)`, `input(prompt) -> str?`, `error(text)`, `int(f64)`, `float(int)`, `exit(code)`.
+- Mathe: `sqrt sin cos tan exp log floor ceil` (f64), `pow(a, b)`, `atan2(y, x)`, `abs(x)`, `min(a, b)`, `max(a, b)` (int oder f64).
 - `str`: `len upper lower trim contains starts_with ends_with split replace to_int to_f64`
 - `List[T]`: `len push pop remove insert clear contains join`; Literal `[1, 2]`, leer `List[int]()`
 - `Map[K, V]`: `len has get remove keys`; `m[k]` lesen/schreiben; leer `Map[str, int]()`

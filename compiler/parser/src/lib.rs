@@ -195,6 +195,23 @@ impl Parser {
     fn fn_decl(&mut self, method: bool) -> R<FnDecl> {
         self.expect(Tok::Fn)?;
         let (name, span) = self.ident("einen Funktionsnamen")?;
+        self.fn_rest(name, span, method)
+    }
+
+    /// `op +(self, o: Vec2) -> Vec2` – Operator-Methode, heißt intern `op+`.
+    fn op_decl(&mut self) -> R<FnDecl> {
+        let span = self.span();
+        self.i += 1;
+        let sym = match self.peek() {
+            Tok::Plus => "+", Tok::Minus => "-", Tok::Star => "*", Tok::Slash => "/", Tok::Percent => "%",
+            Tok::Eq => "==", Tok::Ne => "!=", Tok::Lt => "<", Tok::Le => "<=", Tok::Gt => ">", Tok::Ge => ">=",
+            _ => return Err(self.unexpected("einen Operator (+ - * / % == != < <= > >=)")),
+        };
+        self.i += 1;
+        self.fn_rest(format!("op{sym}"), span, true)
+    }
+
+    fn fn_rest(&mut self, name: String, span: Span, method: bool) -> R<FnDecl> {
         self.expect(Tok::LParen)?;
         let mut this = None;
         let mut params = Vec::new();
@@ -250,8 +267,12 @@ impl Parser {
             return Err(Diag::new(self.span(), "hier fehlt ein eingerückter Block").tip("rücke die Einträge mit 4 Leerzeichen ein"));
         }
         while !self.at(&Tok::Dedent) && !self.at(&Tok::Eof) {
+            let is_op = matches!(self.peek(), Tok::Ident(n) if n == "op")
+                && matches!(self.peek_at(1), Tok::Plus | Tok::Minus | Tok::Star | Tok::Slash | Tok::Percent | Tok::Eq | Tok::Ne | Tok::Lt | Tok::Le | Tok::Gt | Tok::Ge);
             let result = if self.at(&Tok::Fn) {
                 self.fn_decl(true).map(|f| methods.push(f))
+            } else if is_op {
+                self.op_decl().map(|f| methods.push(f))
             } else {
                 entry(self).and_then(|item| {
                     items.push(item);

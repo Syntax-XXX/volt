@@ -50,10 +50,12 @@ fn is_res_void(t: &Type) -> bool {
 
 /// `main` → `main`, `Player.hit` → `6Player3hit`
 fn mangle(key: &str) -> String {
+    // Operator-Methoden (`op+`) enthalten Zeichen, die in C-Namen nicht erlaubt sind → `_xHH`
+    let clean = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c.to_string() } else { format!("_x{:02x}", c as u32) }).collect::<String>();
     if !key.contains('.') {
-        return key.to_string();
+        return clean(key);
     }
-    key.split('.').map(|s| format!("{}{s}", s.len())).collect()
+    key.split('.').map(|s| format!("{}{}", s.len(), clean(s))).collect()
 }
 
 fn fname(key: &str) -> String {
@@ -696,6 +698,14 @@ impl<'a> Gen<'a> {
             "float" => format!("((double)({}))", self.expr(&args[0])),
             "sqrt" => format!("sqrt({})", self.expr(&args[0])),
             "exit" => format!("exit((int)({}))", self.expr(&args[0])),
+            "sin" | "cos" | "tan" | "exp" | "log" | "floor" | "ceil" => format!("{name}({})", self.expr(&args[0])),
+            "pow" | "atan2" => format!("{name}({}, {})", self.expr(&args[0]), self.expr(&args[1])),
+            "min" | "max" => {
+                let ct = self.ctype(&e.ty);
+                let (t1, t2) = (self.fresh("t"), self.fresh("t"));
+                let (a, b) = (self.expr(&args[0]), self.expr(&args[1]));
+                format!("({{ {ct} {t1} = {a}; {ct} {t2} = {b}; {t1} {} {t2} ? {t1} : {t2}; }})", if name == "min" { "<" } else { ">" })
+            }
             _ /* abs */ => {
                 let v = self.expr(&args[0]);
                 if e.ty == Type::F64 {
