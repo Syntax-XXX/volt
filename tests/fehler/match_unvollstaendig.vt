@@ -1,0 +1,7 @@
+enum S
+    A
+    B(n: int)
+
+fn main()
+    match S.A
+        A => print(1)

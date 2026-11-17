@@ -1,0 +1,4 @@
+use fehlt
+
+fn main()
+    print(1)

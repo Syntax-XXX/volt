@@ -1,0 +1,10 @@
+use geo
+
+fn main()
+    let p = geo.Punkt(3, 4)
+    print(geo.abstand2(p))
+    let q: geo.Punkt = geo.ursprung()
+    print(q.x)
+    match geo.Farbe.Rot
+        Rot => print("rot")
+        Gruen => print("grün")

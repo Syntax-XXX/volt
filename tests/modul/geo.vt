@@ -1,0 +1,13 @@
+struct Punkt
+    x: int
+    y: int
+
+enum Farbe
+    Rot
+    Gruen
+
+fn abstand2(p: Punkt) -> int
+    return p.x * p.x + p.y * p.y
+
+fn ursprung() -> Punkt
+    return Punkt(0, 0)

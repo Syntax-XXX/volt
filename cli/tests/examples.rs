@@ -1,22 +1,51 @@
-//! Jedes Beispiel in `examples/` muss genau die Ausgabe aus `<datei>.out` liefern.
-use std::{fs, process::Command};
+//! Snapshot-Tests: jedes Programm in `examples/` und `tests/` (Unterordner: nur `main.vt`) wird gestartet.
+//! Ein Ordner mit `main.vt` ist ein Projekt mit Modulen (nur `main.vt` starten), sonst zählt jede Datei.
+//! `<datei>.out` = erwartete Ausgabe, `<datei>.in` = Eingabe, `<datei>.err` = erwarteter Text in stderr (dann Exit ≠ 0).
+use std::{fs, io::Write, path::Path, process::{Command, Stdio}};
 
-#[test]
-fn beispiele_liefern_die_erwartete_ausgabe() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples");
-    let mut count = 0;
+fn programme(dir: &Path, out: &mut Vec<std::path::PathBuf>, top: bool) {
+    let projekt = !top && dir.join("main.vt").exists();
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
-        if !matches!(path.extension().and_then(|e| e.to_str()), Some("vt" | "vts")) {
-            continue;
+        if path.is_dir() {
+            if !path.ends_with(".volt-cache") {
+                programme(&path, out, false);
+            }
+        } else if matches!(path.extension().and_then(|e| e.to_str()), Some("vt" | "vts")) && (!projekt || path.file_name().unwrap() == "main.vt") {
+            out.push(path);
         }
-        let out = Command::new(env!("CARGO_BIN_EXE_volt")).arg("run").arg(&path).output().unwrap();
-        let want = fs::read_to_string(format!("{}.out", path.display())).unwrap();
-        assert!(out.status.success(), "{}: {}", path.display(), String::from_utf8_lossy(&out.stderr));
-        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{}", path.display());
-        count += 1;
     }
-    assert!(count >= 4);
+}
+
+#[test]
+fn programme_liefern_die_erwartete_ausgabe() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut list = Vec::new();
+    programme(&root.join("examples"), &mut list, true);
+    programme(&root.join("tests"), &mut list, true);
+    list.sort();
+    assert!(list.len() >= 15, "zu wenige Programme gefunden: {list:?}");
+    let mut fehler = Vec::new();
+    for path in &list {
+        let p = path.display();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_volt")).arg("run").arg(path)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let input = fs::read(format!("{p}.in")).unwrap_or_default();
+        child.stdin.take().unwrap().write_all(&input).unwrap();
+        let out = child.wait_with_output().unwrap();
+        let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        match fs::read_to_string(format!("{p}.err")) {
+            Ok(want) if out.status.success() || !stderr.contains(want.trim()) => fehler.push(format!("{p}: erwartet Fehler „{}“, stderr: {stderr}", want.trim())),
+            Err(_) if !out.status.success() => fehler.push(format!("{p}: Exit {:?}\n{stderr}", out.status.code())),
+            _ => {}
+        }
+        if let Ok(want) = fs::read_to_string(format!("{p}.out")) {
+            if stdout != want {
+                fehler.push(format!("{p}: Ausgabe weicht ab\n--- erwartet\n{want}--- bekommen\n{stdout}"));
+            }
+        }
+    }
+    assert!(fehler.is_empty(), "{}", fehler.join("\n\n"));
 }
 
 #[test]

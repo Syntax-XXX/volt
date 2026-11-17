@@ -1,0 +1,13 @@
+fn main()
+    var i = 0
+    while true
+        i += 1
+        if i % 2 == 0
+            continue
+        if i > 7
+            break
+        print(i)
+    for k in 0..10
+        if k == 3
+            break
+        print("k{k}")

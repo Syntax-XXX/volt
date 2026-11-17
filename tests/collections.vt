@@ -1,0 +1,51 @@
+fn main()
+    var xs = List[int]()
+    for i in 0..5
+        xs.push(i * i)
+    xs.push(xs.len())
+    print(xs.len())
+    print(xs[4])
+    xs[0] = 99
+    xs[1] += 10
+    print("{xs[0]} {xs[1]}")
+    print(xs.contains(16))
+    print(xs.pop().or(-1))
+    print(xs.remove(0))
+    xs.insert(0, 7)
+    var sum = 0
+    for x in xs
+        sum += x
+    print(sum)
+
+    let ages = Map[str, int]()
+    ages["ana"] = 30
+    ages["bo"] = 25
+    ages["ana"] += 1
+    print(ages["ana"])
+    print(ages.len())
+    print(ages.has("bo"))
+    print(ages.get("cy").or(0))
+    ages.remove("bo")
+    for k in ages.keys()
+        print("{k} ist {ages[k]}")
+
+    let words = "  Hallo  Volt Welt ".trim().split(" ")
+    print(words.len())
+    print(words.join("|"))
+    print("Volt".upper())
+    print("Volt".lower().replace("o", "0"))
+    print("volt.vt".ends_with(".vt"))
+    print("volt.vt".starts_with("vo"))
+    print("abc".contains("bc"))
+    print("x".len())
+    let n = "41".to_int().or(0) + 1
+    print(n)
+    print("2.5".to_f64().or(0.0) * 2)
+    var grid = Map[int, List[str]]()
+    grid[1] = ["a"]
+    grid[1].push("b")
+    print(grid[1].join(","))
+    print(sqrt(16.0))
+    print(abs(-3))
+    print(int(3.9))
+    print(float(2) / 4)

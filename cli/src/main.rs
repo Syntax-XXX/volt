@@ -7,6 +7,7 @@ use std::{
     process::{Command, ExitCode},
 };
 use volt_parser::ast::{dump, Module};
+use volt_types::Unit;
 
 const HELP: &str = "\
 volt – die Programmiersprache Volt ⚡
@@ -33,8 +34,8 @@ fn main() -> ExitCode {
             let default = PathBuf::from(file.file_stem().unwrap_or_default());
             compile(file, flag("--release"), Some(out.unwrap_or(default))).map(|_| 0)
         }
-        (Some("parse"), Some(file)) => frontend(file, false).map(|module| {
-            print!("{}", if flag("--ast") { dump(&module) } else { "Syntax ok\n".to_string() });
+        (Some("parse"), Some(file)) => frontend(file, false).map(|units| {
+            print!("{}", if flag("--ast") { dump(&units[0].module) } else { "Syntax ok\n".to_string() });
             0
         }),
         (Some("--version"), _) => {
@@ -53,8 +54,22 @@ fn main() -> ExitCode {
     ExitCode::from(result.unwrap_or(1))
 }
 
-/// Datei lesen, lexen, parsen und (für run/build) Typen prüfen. Fehler werden hier ausgegeben.
-fn frontend(path: &Path, check: bool) -> Result<Module, ()> {
+/// Eine Quelldatei: Hauptprogramm (Name leer) oder Modul aus `use name` (`name.vt` im selben Ordner).
+struct Source {
+    file: String,
+    src: String,
+}
+
+fn lex_parse(src: &str, script: bool) -> (Module, Vec<volt_lexer::Diag>) {
+    match volt_lexer::lex(src) {
+        Ok(tokens) if script => volt_parser::parse_script(tokens),
+        Ok(tokens) => volt_parser::parse(tokens),
+        Err(diag) => (Module::default(), vec![diag]),
+    }
+}
+
+/// Datei samt aller `use`-Module lesen, lexen, parsen und (für run/build) Typen prüfen. Fehler werden hier ausgegeben.
+fn frontend(path: &Path, check: bool) -> Result<Vec<Unit>, ()> {
     let script = match path.extension().and_then(|e| e.to_str()) {
         Some("vt") => false,
         Some("vts") => true,
@@ -64,20 +79,40 @@ fn frontend(path: &Path, check: bool) -> Result<Module, ()> {
         }
     };
     let src = fs::read_to_string(path).map_err(|e| eprintln!("error: `{}` lässt sich nicht lesen: {e}", path.display()))?;
-    let (mut module, mut diags) = match volt_lexer::lex(&src) {
-        Ok(tokens) if script => volt_parser::parse_script(tokens),
-        Ok(tokens) => volt_parser::parse(tokens),
-        Err(diag) => (Module { fns: Vec::new() }, vec![diag]),
-    };
+    let dir = path.parent().unwrap_or(Path::new(""));
+    let (module, d) = lex_parse(&src, script);
+    let mut units = vec![Unit { name: String::new(), module }];
+    let mut sources = vec![Source { file: path.display().to_string(), src }];
+    let mut diags: Vec<(usize, volt_lexer::Diag)> = d.into_iter().map(|d| (0, d)).collect();
+    // Module der Reihe nach nachladen; jedes nur einmal (auch bei gegenseitigem `use`).
+    let mut i = 0;
+    while i < units.len() {
+        let uses = units[i].module.uses.clone();
+        for (name, span) in uses {
+            if units.iter().any(|u| u.name == name) {
+                continue;
+            }
+            let file = dir.join(format!("{name}.vt"));
+            match fs::read_to_string(&file) {
+                Ok(src) => {
+                    let (module, d) = lex_parse(&src, false);
+                    diags.extend(d.into_iter().map(|d| (units.len(), d)));
+                    units.push(Unit { name: name.clone(), module });
+                    sources.push(Source { file: file.display().to_string(), src });
+                }
+                Err(_) => diags.push((i, volt_lexer::Diag::new(span, format!("das Modul `{name}` gibt es nicht")).tip(format!("lege `{}` an", file.display())))),
+            }
+        }
+        i += 1;
+    }
     if diags.is_empty() && check {
-        diags = volt_types::check(&mut module);
+        diags = volt_types::check_program(&mut units);
     }
     if diags.is_empty() {
-        return Ok(module);
+        return Ok(units);
     }
-    let name = path.display().to_string();
-    for d in &diags {
-        eprintln!("{}", d.render(&name, &src));
+    for (u, d) in &diags {
+        eprintln!("{}", d.render(&sources[*u].file, &sources[*u].src));
     }
     eprintln!("{} Fehler – nichts gebaut", diags.len());
     Err(())
@@ -85,7 +120,7 @@ fn frontend(path: &Path, check: bool) -> Result<Module, ()> {
 
 /// Volt → C → Programm. Ohne `out` landet das Programm im Cache neben der Quelldatei.
 fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, ()> {
-    let module = frontend(path, true)?;
+    let units = frontend(path, true)?;
     let cache = path.parent().unwrap_or(Path::new("")).join(".volt-cache");
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let c_file = cache.join(format!("{stem}.c"));
@@ -96,7 +131,7 @@ fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, 
         return Err(());
     }
     fs::create_dir_all(&cache)
-        .and_then(|_| fs::write(&c_file, volt_codegen_c::emit(&module)))
+        .and_then(|_| fs::write(&c_file, volt_codegen_c::emit_program(&units.iter().map(|u| &u.module).collect::<Vec<_>>())))
         .map_err(|e| eprintln!("error: `{}` lässt sich nicht schreiben: {e}", c_file.display()))?;
 
     let chosen = env::var("VOLT_CC").ok();
@@ -111,6 +146,7 @@ fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, 
         if release {
             cmd.arg("-O2");
         }
+        cmd.arg("-lm"); // sqrt, fabs
         if !cc.contains("tcc") {
             cmd.arg("-fwrapv"); // int läuft bei Überlauf definiert über; tcc macht das von sich aus
         }

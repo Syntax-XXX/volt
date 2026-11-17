@@ -1,0 +1,32 @@
+struct Vec2
+    x: f64
+    y: f64
+
+    fn len2(self) -> f64
+        return self.x * self.x + self.y * self.y
+
+struct Player
+    name: str
+    hp: int = 100
+    pos: Vec2 = Vec2(0.0, 0.0)
+
+    fn hit(mut self, dmg: int)
+        self.hp -= dmg
+        if self.hp <= 0
+            print("{self.name} ist besiegt")
+
+    fn alive(self) -> bool
+        return self.hp > 0
+
+fn main()
+    var p = Player("Ana")
+    print("{p.name} hat {p.hp} HP")
+    p.hit(30)
+    print(p.hp)
+    var q = p
+    q.hit(80)
+    print("p: {p.hp}, q: {q.hp}, q lebt: {q.alive()}")
+    var b = Player(name: "Bo", hp: 5, pos: Vec2(3.0, 4.0))
+    print(b.pos.len2())
+    b.pos.x = 1.0
+    print(b.pos.len2())

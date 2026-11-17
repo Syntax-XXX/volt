@@ -1,0 +1,9 @@
+fn teile(a: int, b: int) -> int!
+    if b == 0
+        return error("durch null")
+    return a / b
+
+fn main() -> !
+    print(teile(6, 3)?)
+    print(teile(1, 0)?)
+    print("hier nicht mehr")

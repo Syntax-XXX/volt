@@ -1,0 +1,43 @@
+fn find(xs: List[int], x: int) -> int?
+    for i in 0..xs.len()
+        if xs[i] == x
+            return i
+    return none
+
+fn first_even(xs: List[int]) -> int?
+    let i = find(xs, 4)?
+    return xs[i] * 10
+
+fn parse(s: str) -> int!
+    let n = s.trim().to_int() else
+        return error("keine Zahl: '{s}'")
+    if n < 0
+        return error("negativ: {n}")
+    return n
+
+fn double_sum(a: str, b: str) -> int!
+    return parse(a)? * 2 + parse(b)?
+
+fn show(a: str, b: str)
+    let v = double_sum(a, b) else err
+        print("Fehler: {err}")
+        return
+    print(v)
+
+fn main()
+    let xs = [3, 4, 5]
+    if let i = find(xs, 5)
+        print("5 an Stelle {i}")
+    if let i = find(xs, 9)
+        print("darf nicht kommen")
+    else
+        print("9 fehlt")
+    print(first_even(xs).or(-1))
+    print(first_even([1]).or(-1))
+    show(" 4", "1")
+    show("x", "1")
+    show("2", "-3")
+    var o: int? = none
+    print(o.or(7))
+    o = 3
+    print(o.or(7))

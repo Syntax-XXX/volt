@@ -1,0 +1,7 @@
+fn main()
+    var summe = 0
+    while true
+        let zeile = input("> ") else
+            break
+        summe += zeile.to_int().or(0)
+    print("Summe: {summe}")
