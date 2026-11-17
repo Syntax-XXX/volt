@@ -1,0 +1,18 @@
+fn main()
+    let n = 5000000
+    let flags = List[bool]()
+    for i in 0..n + 1
+        flags.push(true)
+    var i = 2
+    while i * i <= n
+        if flags[i]
+            var j = i * i
+            while j <= n
+                flags[j] = false
+                j += i
+        i += 1
+    var count = 0
+    for k in 2..n + 1
+        if flags[k]
+            count += 1
+    print(count)

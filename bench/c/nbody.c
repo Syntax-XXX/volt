@@ -1,0 +1,9 @@
+#include <stdio.h>
+#include <math.h>
+typedef struct{double x,y,z,vx,vy,vz,m;}B;
+static double energy(B*b,int n){double e=0;for(int i=0;i<n;i++){e+=0.5*b[i].m*(b[i].vx*b[i].vx+b[i].vy*b[i].vy+b[i].vz*b[i].vz);for(int j=i+1;j<n;j++){double dx=b[i].x-b[j].x,dy=b[i].y-b[j].y,dz=b[i].z-b[j].z;e-=b[i].m*b[j].m/sqrt(dx*dx+dy*dy+dz*dz);}}return e;}
+static void adv(B*b,int n,double dt){for(int i=0;i<n;i++)for(int j=i+1;j<n;j++){double dx=b[i].x-b[j].x,dy=b[i].y-b[j].y,dz=b[i].z-b[j].z;double d2=dx*dx+dy*dy+dz*dz;double mag=dt/(d2*sqrt(d2));b[i].vx-=dx*b[j].m*mag;b[i].vy-=dy*b[j].m*mag;b[i].vz-=dz*b[j].m*mag;b[j].vx+=dx*b[i].m*mag;b[j].vy+=dy*b[i].m*mag;b[j].vz+=dz*b[i].m*mag;}for(int i=0;i<n;i++){b[i].x+=dt*b[i].vx;b[i].y+=dt*b[i].vy;b[i].z+=dt*b[i].vz;}}
+int main(void){double pi=3.141592653589793,sm=4*pi*pi,dp=365.24;
+B b[5]={{0,0,0,0,0,0,sm},{4.84143144246472090,-1.16032004402742839,-0.103622044471123109,0.00166007664274403694*dp,0.00769901118419740425*dp,-0.0000690460016972063023*dp,0.000954791938424326609*sm},{8.34336671824457987,4.12479856412430479,-0.403523417114321381,-0.00276742510726862411*dp,0.00499852801234917238*dp,0.0000230417297573763929*dp,0.000285885980666130812*sm},{12.8943695621391310,-15.1111514016986312,-0.223307578892655734,0.00296460137564761618*dp,0.00237847173959480950*dp,-0.0000296589568540237556*dp,0.0000436624404335156298*sm},{15.3796971148509165,-25.9193146099879641,0.179258772950371181,0.00268067772490389322*dp,0.00162824170038242295*dp,-0.0000951592254519715870*dp,0.0000515138902046611451*sm}};
+double px=0,py=0,pz=0;for(int i=0;i<5;i++){px+=b[i].vx*b[i].m;py+=b[i].vy*b[i].m;pz+=b[i].vz*b[i].m;}b[0].vx=-px/sm;b[0].vy=-py/sm;b[0].vz=-pz/sm;
+printf("%ld\n",(long)(energy(b,5)*1e9));for(int s=0;s<200000;s++)adv(b,5,0.01);printf("%ld\n",(long)(energy(b,5)*1e9));return 0;}

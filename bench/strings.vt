@@ -1,0 +1,7 @@
+# Baut viele kurze Strings – zeigt, was das ungeräumte Speichermodell (Phase 2) kostet.
+fn main()
+    var total = 0
+    for i in 0..500000
+        let s = "Eintrag {i} von {i * 2}"
+        total += s.len()
+    print(total)
