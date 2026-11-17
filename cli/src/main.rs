@@ -54,6 +54,18 @@ fn main() -> ExitCode {
     ExitCode::from(result.unwrap_or(1))
 }
 
+/// FNV-1a über mehrere Teile – stabil über Rust-Versionen hinweg (anders als `DefaultHasher`).
+fn fnv1a(parts: &[&[u8]]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for part in parts {
+        for b in *part {
+            h = (h ^ *b as u64).wrapping_mul(0x100000001b3);
+        }
+        h = (h ^ 0xff).wrapping_mul(0x100000001b3); // Trenner, damit „ab“+„c“ ≠ „a“+„bc“
+    }
+    h
+}
+
 /// Eine Quelldatei: Hauptprogramm (Name leer) oder Modul aus `use name` (`name.vt` im selben Ordner).
 struct Source {
     file: String,
@@ -130,11 +142,19 @@ fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, 
         eprintln!("error: das Ziel `{}` ist die Quelldatei selbst\n     = tipp: gib mit `-o <name>` ein anderes Ziel an", bin.display());
         return Err(());
     }
+    let c_code = volt_codegen_c::emit_program(&units.iter().map(|u| &u.module).collect::<Vec<_>>());
     fs::create_dir_all(&cache)
-        .and_then(|_| fs::write(&c_file, volt_codegen_c::emit_program(&units.iter().map(|u| &u.module).collect::<Vec<_>>())))
+        .and_then(|_| fs::write(&c_file, &c_code))
         .map_err(|e| eprintln!("error: `{}` lässt sich nicht schreiben: {e}", c_file.display()))?;
 
+    // Build-Cache: derselbe C-Code (enthält die Runtime) + dieselben Compiler-Einstellungen + dasselbe Ziel → Programm ist schon da.
     let chosen = env::var("VOLT_CC").ok();
+    let key = format!("{:016x} {} {} {}", fnv1a(&[c_code.as_bytes(), chosen.as_deref().unwrap_or("").as_bytes(), &[release as u8], env!("CARGO_PKG_VERSION").as_bytes()]), release, chosen.as_deref().unwrap_or("-"), bin.display());
+    let key_file = cache.join(format!("{stem}.key"));
+    if bin.exists() && fs::read_to_string(&key_file).is_ok_and(|k| k == key) {
+        return Ok(bin);
+    }
+
     let candidates: Vec<&str> = match &chosen {
         Some(cc) => vec![cc],
         None if release => vec!["clang", "gcc", "cc", "tcc"],
@@ -153,7 +173,11 @@ fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, 
         match cmd.output() {
             Err(e) if e.kind() == ErrorKind::NotFound => continue,
             Err(e) => eprintln!("error: `{cc}` lässt sich nicht starten: {e}"),
-            Ok(done) if done.status.success() => return Ok(bin),
+            Ok(done) if done.status.success() => {
+                // Schlüssel erst nach erfolgreichem Bauen schreiben (kaputte Builds gelten nie als „aktuell“).
+                let _ = fs::write(&key_file, &key);
+                return Ok(bin);
+            }
             Ok(done) => eprintln!(
                 "interner Fehler: `{cc}` nimmt den erzeugten C-Code nicht an – das ist ein Fehler in Volt, nicht in deinem Programm.\nC-Datei: {}\n{}",
                 c_file.display(),

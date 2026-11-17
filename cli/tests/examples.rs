@@ -66,3 +66,22 @@ fn division_durch_null_bricht_sauber_ab() {
     assert_eq!(out.status.code(), Some(101));
     assert!(String::from_utf8_lossy(&out.stderr).contains("Division durch null (Zeile 2)"));
 }
+
+#[test]
+fn build_cache_baut_unveraenderte_programme_nicht_neu() {
+    let dir = std::env::temp_dir().join(format!("volt-cache-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("cache.vt");
+    fs::write(&file, "fn main()\n    print(\"eins\")\n").unwrap();
+    let run = || Command::new(env!("CARGO_BIN_EXE_volt")).arg("run").arg(&file).output().unwrap();
+    let bin = dir.join(".volt-cache").join("cache");
+    assert_eq!(String::from_utf8_lossy(&run().stdout), "eins\n");
+    let first = fs::metadata(&bin).unwrap().modified().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(String::from_utf8_lossy(&run().stdout), "eins\n");
+    assert_eq!(fs::metadata(&bin).unwrap().modified().unwrap(), first, "unverändertes Programm wurde neu gebaut");
+    fs::write(&file, "fn main()\n    print(\"zwei\")\n").unwrap();
+    assert_eq!(String::from_utf8_lossy(&run().stdout), "zwei\n", "Änderung muss neu gebaut werden");
+    assert!(fs::metadata(&bin).unwrap().modified().unwrap() > first);
+    fs::remove_dir_all(&dir).ok();
+}
