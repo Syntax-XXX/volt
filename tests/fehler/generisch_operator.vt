@@ -1,0 +1,7 @@
+fn groesser[T](a: T, b: T) -> T
+    if a < b
+        return b
+    return a
+
+fn main()
+    print(groesser(true, false))

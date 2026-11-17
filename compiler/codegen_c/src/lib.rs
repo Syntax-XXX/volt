@@ -594,7 +594,7 @@ impl<'a> Gen<'a> {
                 self.seq(ops, |v| match op {
                     BinOp::Div if ty == Type::Int => format!("volt_div({}, {}, {line})", v[0], v[1]),
                     BinOp::Mod => format!("volt_mod({}, {}, {line})", v[0], v[1]),
-                    BinOp::Eq | BinOp::Ne if lt == Type::Str => format!("(strcmp({}, {}) {} 0)", v[0], v[1], op.sym()),
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge if lt == Type::Str => format!("(strcmp({}, {}) {} 0)", v[0], v[1], op.sym()),
                     BinOp::Eq | BinOp::Ne if matches!(lt, Type::Enum(_)) => format!("(({}).tag {} ({}).tag)", v[0], op.sym(), v[1]),
                     _ => format!("({} {} {})", v[0], op.sym(), v[1]),
                 })

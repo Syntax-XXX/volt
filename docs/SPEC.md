@@ -59,7 +59,7 @@ match wert
 `match` muss alle Fälle abdecken. Steht es am Ende einer Funktion mit Rückgabewert, sind `Fall => ausdruck` Rückgaben.
 
 ## Ausdrücke
-`or` · `and` · `not` / Vergleiche · `+ -` · `* / %` · `-x` · Anhängsel `.feld .methode() (…) [i] ?`
+`or` · `and` · `not` / Vergleiche (`< <= > >=` auch für `str`, nach Zeichen-Reihenfolge) · `+ -` · `* / %` · `-x` · Anhängsel `.feld .methode() (…) [i] ?`
 - `wert?` gibt `none` bzw. den Fehler an den Aufrufer weiter (die Funktion muss selbst `T?`/`T!` liefern).
 - `/` und `%` durch 0, Index außerhalb, fehlender Map-Schlüssel → Abbruch mit Exit 101 und Zeile.
 - Ein `T!`-Ergebnis darf nicht still verworfen werden (`f()?` oder `let _ = f() else err`).

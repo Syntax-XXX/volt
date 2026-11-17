@@ -63,6 +63,12 @@ enum PathRes {
     Missing,
 }
 
+struct Inst {
+    unit: usize,
+    subst: HashMap<String, Type>,
+    decl: Option<FnDecl>,
+}
+
 struct Checker {
     /// Name und `use`-Liste je Datei.
     units: Vec<(String, HashSet<String>)>,
@@ -73,6 +79,12 @@ struct Checker {
     fns: HashMap<String, Sig>,
     /// Konstanten aus C-Headern (`m.M_PI`), als Literal eingesetzt.
     cconsts: HashMap<String, CConst>,
+    /// Generische Funktionen (Vorlagen): Schlüssel → (Datei, Deklaration).
+    generics: HashMap<String, (usize, FnDecl)>,
+    /// Aktuell eingesetzte Typ-Parameter beim Prüfen einer Kopie (`T` → `int`).
+    subst: HashMap<String, Type>,
+    /// Erzeugte Kopien generischer Funktionen, Rümpfe werden nach allen anderen geprüft.
+    insts: Vec<Inst>,
     unit: usize,
     /// Sichtbare Variablen, innerster Block zuletzt.
     scopes: Vec<HashMap<String, Var>>,
@@ -99,6 +111,9 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
         variants: HashMap::new(),
         fns: HashMap::new(),
         cconsts: HashMap::new(),
+        generics: HashMap::new(),
+        subst: HashMap::new(),
+        insts: Vec::new(),
         unit: 0,
         scopes: Vec::new(),
         ret: Type::Void,
@@ -160,7 +175,14 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
             }
         }
         for f in &mut u.module.fns {
-            c.signature(f, None);
+            if f.generics.is_empty() {
+                c.signature(f, None);
+            } else {
+                // Vorlage: erst beim Aufruf mit konkreten Typen prüfen (wie C++-Templates)
+                f.key = c.qual(&f.name);
+                c.fns.insert(f.key.clone(), Sig { this: None, params: Vec::new(), ret: Type::Unknown });
+                c.generics.insert(f.key.clone(), (ui, f.clone()));
+            }
         }
     }
     // 3. Ein Typ darf sich nicht selbst (direkt oder über andere) als Wert enthalten.
@@ -207,8 +229,27 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
             }
         }
         for f in &mut u.module.fns {
-            c.function(f, None);
+            if f.generics.is_empty() {
+                c.function(f, None);
+            }
         }
+    }
+    // Kopien generischer Funktionen (können weitere Kopien auslösen)
+    let mut i = 0;
+    while i < c.insts.len() {
+        let mut decl = c.insts[i].decl.take().expect("Kopie wartet auf Prüfung");
+        c.unit = c.insts[i].unit;
+        c.subst = c.insts[i].subst.clone();
+        c.function(&mut decl, None);
+        c.subst.clear();
+        c.insts[i].decl = Some(decl);
+        i += 1;
+    }
+    for inst in std::mem::take(&mut c.insts) {
+        units[inst.unit].module.fns.push(inst.decl.expect("geprüft"));
+    }
+    for u in units.iter_mut() {
+        u.module.fns.retain(|f| f.generics.is_empty());
     }
     // `x += 1` mit unbekanntem `x` meldet sonst denselben Fehler zweimal.
     c.diags.dedup_by(|a, b| a.0 == b.0 && a.1.span == b.1.span && a.1.msg == b.1.msg);
@@ -372,6 +413,7 @@ impl Checker {
 
     fn resolve(&mut self, t: &TypeRef) -> Type {
         let mut ty = match (t.name.as_str(), t.args.len()) {
+            (name, 0) if self.subst.contains_key(name) => self.subst[name].clone(),
             ("", _) => Type::Void,
             ("int", 0) => Type::Int,
             ("f64", 0) => Type::F64,
@@ -1015,6 +1057,80 @@ impl Checker {
         (self.call_args(name, &params, args, span), ret)
     }
 
+    /// Typ-Parameter aus einem Argumenttyp ableiten: `List[T]` gegen `List[int]` ergibt `T = int`.
+    fn unify(r: &TypeRef, t: &Type, gens: &[String], out: &mut HashMap<String, Type>) {
+        let mut t = t.clone();
+        for c in r.suffix.iter().rev() {
+            t = match (c, t) {
+                ('?', Type::Opt(x)) | ('!', Type::Res(x)) => *x,
+                (_, other) => other,
+            };
+        }
+        if r.args.is_empty() && gens.contains(&r.name) {
+            match out.get(&r.name) {
+                Some(Type::Int) if t == Type::F64 => {
+                    out.insert(r.name.clone(), Type::F64); // int und f64 gemischt → f64
+                }
+                Some(_) => {}
+                None => {
+                    out.insert(r.name.clone(), t);
+                }
+            }
+        } else if r.name == "List" && r.args.len() == 1 {
+            if let Type::List(x) = &t {
+                Self::unify(&r.args[0], x, gens, out);
+            }
+        } else if r.name == "Map" && r.args.len() == 2 {
+            if let Type::Map(k, v) = &t {
+                Self::unify(&r.args[0], k, gens, out);
+                Self::unify(&r.args[1], v, gens, out);
+            }
+        }
+    }
+
+    /// Aufruf einer generischen Funktion: Typen aus den Argumenten ableiten, Kopie für genau diese Typen anlegen
+    /// (einmal je Kombination) und wie einen normalen Aufruf behandeln.
+    fn generic_call(&mut self, key: String, mut args: Vec<Arg>, span: Span) -> (ExprKind, Type) {
+        let (ui, decl) = self.generics[&key].clone();
+        let types: Vec<Type> = args.iter_mut().map(|a| self.value(&mut a.value)).collect();
+        if types.len() != decl.params.len() {
+            self.err(Diag::new(span, format!("`{}` erwartet {} Argument(e), bekommen hat es {}", decl.name, decl.params.len(), types.len())));
+            return (ExprKind::Int(0), Type::Unknown);
+        }
+        let mut bound = HashMap::new();
+        for (p, t) in decl.params.iter().zip(&types) {
+            Self::unify(&p.ty_ref, t, &decl.generics, &mut bound);
+        }
+        for g in &decl.generics {
+            if !bound.contains_key(g) {
+                self.err(Diag::new(span, format!("bei `{}` lässt sich der Typ `{g}` aus den Argumenten nicht erkennen", decl.name)).tip(format!("`{g}` muss in einem Parameter vorkommen, z. B. `x: {g}`")));
+                return (ExprKind::Int(0), Type::Unknown);
+            }
+        }
+        if bound.values().any(|t| matches!(t, Type::Unknown | Type::None | Type::Error)) {
+            return (ExprKind::Int(0), Type::Unknown);
+        }
+        let inst_key = format!("{key}<{}>", decl.generics.iter().map(|g| bound[g].name()).collect::<Vec<_>>().join(","));
+        if !self.fns.contains_key(&inst_key) {
+            let (saved_unit, saved_subst) = (self.unit, std::mem::replace(&mut self.subst, bound.clone()));
+            self.unit = ui;
+            let mut d = decl.clone();
+            d.generics.clear();
+            for p in &mut d.params {
+                p.ty = self.resolve(&p.ty_ref);
+            }
+            d.ret = d.ret_ref.as_ref().map_or(Type::Void, |r| self.resolve(r));
+            d.key = inst_key.clone();
+            self.fns.insert(inst_key.clone(), Sig { this: None, params: d.params.iter().map(|p| p.ty.clone()).collect(), ret: d.ret.clone() });
+            self.unit = saved_unit;
+            self.subst = saved_subst;
+            self.insts.push(Inst { unit: ui, subst: bound, decl: Some(d) });
+        }
+        let sig = self.fns[&inst_key].clone();
+        let args = self.call_args(&decl.name, &sig.params, args, span);
+        (ExprKind::Invoke { target: Target::Fn(inst_key), args }, sig.ret)
+    }
+
     fn call(&mut self, callee: Expr, args: Vec<Arg>, span: Span) -> (ExprKind, Type) {
         // Methode auf einem Wert: `p.hit(5)`, `name.upper()`
         if self.path(&callee).is_none() {
@@ -1089,6 +1205,7 @@ impl Checker {
             (ExprKind::Int(0), Type::Unknown)
         };
         match self.resolve_path(&segs) {
+            PathRes::Fn(key) if self.generics.contains_key(&key) => self.generic_call(key, args, span),
             PathRes::Fn(key) | PathRes::Static(key) if self.fns[&key].this.is_none() => {
                 let sig = self.fns[&key].clone();
                 let args = self.call_args(segs.last().unwrap(), &sig.params, args, span);
@@ -1338,7 +1455,7 @@ impl Checker {
             _ if *l == Unknown || *r == Unknown => Some(if arithmetic { Unknown } else { Bool }),
             Add | Sub | Mul | Div if l.is_num() && r.is_num() => Some(if *l == F64 || *r == F64 { F64 } else { Int }),
             Mod if *l == Int && *r == Int => Some(Int),
-            Lt | Le | Gt | Ge if l.is_num() && r.is_num() => Some(Bool),
+            Lt | Le | Gt | Ge if (l.is_num() && r.is_num()) || (*l == Str && *r == Str) => Some(Bool),
             Eq | Ne if (l == r && (l.is_prim() || fieldless(l))) || (l.is_num() && r.is_num()) => Some(Bool),
             And | Or if *l == Bool && *r == Bool => Some(Bool),
             _ => Option::None,

@@ -1,0 +1,5 @@
+fn leer[T]() -> int
+    return 1
+
+fn main()
+    print(leer())

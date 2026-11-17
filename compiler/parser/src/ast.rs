@@ -116,6 +116,7 @@ impl TypeRef {
     }
 }
 
+#[derive(Clone)]
 pub struct Param {
     pub name: String,
     pub span: Span,
@@ -131,8 +132,11 @@ pub enum SelfKind {
     Mut,
 }
 
+#[derive(Clone)]
 pub struct FnDecl {
     pub name: String,
+    /// Typ-Parameter: `fn groesser[T](a: T, b: T) -> T`. Der Typchecker erzeugt je Typ eine eigene Kopie.
+    pub generics: Vec<String>,
     pub span: Span,
     /// Nur bei Methoden.
     pub this: Option<SelfKind>,
@@ -375,7 +379,8 @@ fn dump_fn(out: &mut String, f: &FnDecl, depth: usize) {
         None => {}
     }
     params.extend(f.params.iter().map(|p| format!("{}: {}", p.name, p.ty_ref.text())));
-    *out += &format!("{}fn {}({})", "  ".repeat(depth), f.name, params.join(", "));
+    let gen = if f.generics.is_empty() { String::new() } else { format!("[{}]", f.generics.join(", ")) };
+    *out += &format!("{}fn {}{gen}({})", "  ".repeat(depth), f.name, params.join(", "));
     if let Some(ret) = &f.ret_ref {
         *out += &format!(" -> {}", ret.text());
     }

@@ -60,7 +60,7 @@ fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
             p.diags.push(Diag::new(f.span, "ein Skript braucht kein `fn main()`").tip("schreibe den Code direkt auf die oberste Ebene"));
         }
         let span = Span { line: 1, col: 1, len: 1 };
-        m.fns.push(FnDecl { name: "main".into(), span, this: None, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body: top, key: String::new() });
+        m.fns.push(FnDecl { name: "main".into(), generics: Vec::new(), span, this: None, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body: top, key: String::new() });
     }
     (m, p.diags)
 }
@@ -204,7 +204,7 @@ impl Parser {
         };
         let body = self.block()?;
         let fname = format!("__test_{n}");
-        Ok(((name, fname.clone()), FnDecl { name: fname, span, this: None, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body, key: String::new() }))
+        Ok(((name, fname.clone()), FnDecl { name: fname, generics: Vec::new(), span, this: None, params: Vec::new(), ret_ref: None, ret: Type::Unknown, body, key: String::new() }))
     }
 
     /// `import c "math.h" as m` (+ `link "m"` für Bibliotheken)
@@ -274,6 +274,24 @@ impl Parser {
     }
 
     fn fn_rest(&mut self, name: String, span: Span, method: bool) -> R<FnDecl> {
+        let mut generics = Vec::new();
+        if self.at(&Tok::LBracket) {
+            if method {
+                return Err(Diag::new(self.span(), "Methoden können keine Typ-Parameter haben").tip("mach daraus eine freie Funktion: `fn name[T](…)`"));
+            }
+            self.i += 1;
+            loop {
+                let (g, at) = self.ident("einen Namen für den Typ-Parameter (z. B. `T`)")?;
+                if generics.contains(&g) {
+                    return Err(Diag::new(at, format!("der Typ-Parameter `{g}` steht doppelt")));
+                }
+                generics.push(g);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(Tok::RBracket)?;
+        }
         self.expect(Tok::LParen)?;
         let mut this = None;
         let mut params = Vec::new();
@@ -307,7 +325,7 @@ impl Parser {
         if ret_ref.is_some() {
             tail_match_returns(&mut body);
         }
-        Ok(FnDecl { name, span, this, params, ret_ref, ret: Type::Unknown, body, key: String::new() })
+        Ok(FnDecl { name, generics, span, this, params, ret_ref, ret: Type::Unknown, body, key: String::new() })
     }
 
     /// `name: Typ` mit optionalem `= standardwert`.
