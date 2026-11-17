@@ -1,0 +1,211 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Volt – Tutorial</title><style>:root{--bg:#fbfaf7;--fg:#1d1b18;--mut:#6b655c;--acc:#d97a00;--code:#f1eee7;--line:#e3ded3}
+@media(prefers-color-scheme:dark){:root{--bg:#14120f;--fg:#ece7dc;--mut:#9b9488;--acc:#ffb347;--code:#201d18;--line:#322e27}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 Georgia,'Iowan Old Style',serif}
+header{border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+nav{max-width:860px;margin:auto;padding:12px 16px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-family:system-ui,sans-serif;font-size:15px}
+nav b{font-size:19px;margin-right:auto;color:var(--acc)}nav a{color:var(--mut);text-decoration:none}nav a.on,nav a:hover{color:var(--fg)}
+main{max-width:860px;margin:auto;padding:8px 16px 80px}h1,h2,h3{font-family:system-ui,sans-serif;line-height:1.25;margin-top:2em}h1{font-size:2.2em;margin-top:1em}
+a{color:var(--acc)}code{font:0.88em ui-monospace,Menlo,Consolas,monospace;background:var(--code);padding:.1em .35em;border-radius:4px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;line-height:1.5}pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font:15px system-ui,sans-serif;display:block;overflow-x:auto}td,th{border:1px solid var(--line);padding:6px 10px;text-align:left}th{background:var(--code)}
+footer{text-align:center;color:var(--mut);font:14px system-ui,sans-serif;padding:30px}</style></head><body><header><nav><b>⚡ Volt</b><a href="index.html" class="">Start</a><a href="tutorial.html" class="on">Tutorial</a><a href="spec.html" class="">Sprache</a><a href="entscheidungen.html" class="">Entscheidungen</a><a href="benchmarks.html" class="">Benchmarks</a></nav></header><main><h1 id="lerne-volt-in-einer-stunde">Lerne Volt in einer Stunde</h1>
+<p>Volt liest sich wie Python und läuft wie C. Alle Beispiele hier sind vollständige Programme: kopieren, in <code>datei.vt</code> speichern, mit <code>volt run datei.vt</code> starten.</p>
+<h2 id="1-hallo-volt">1. Hallo, Volt</h2>
+<pre><code class="lang-volt">fn main()
+    print(&quot;Hallo, Volt! ⚡&quot;)</code></pre>
+<p>Ein Programm beginnt in <code>fn main()</code>. Blöcke werden durch Einrücken (4 Leerzeichen) gebildet, Kommentare beginnen mit <code>#</code>.</p>
+<h2 id="2-variablen-und-typen">2. Variablen und Typen</h2>
+<pre><code class="lang-volt">fn main()
+    let name = &quot;Ana&quot;          # unveränderlich
+    var punkte = 0            # veränderlich
+    punkte += 10
+    let preis: f64 = 4.5      # Typ ist optional
+    let aktiv = true
+    print(&quot;{name} hat {punkte} Punkte, Preis {preis}, aktiv: {aktiv}&quot;)</code></pre>
+<p>Typen: <code>int</code>, <code>f64</code>, <code>bool</code>, <code>str</code>. In Strings steht <code>{ausdruck}</code> für einen eingefügten Wert. Ein Name bedeutet immer genau eine Variable (kein Überdecken).</p>
+<h2 id="3-funktionen">3. Funktionen</h2>
+<pre><code class="lang-volt">fn quadrat(n: int) -&gt; int
+    return n * n
+
+fn begruesse(name: str)
+    print(&quot;Hallo, {name}!&quot;)
+
+fn main()
+    begruesse(&quot;Welt&quot;)
+    print(quadrat(12))</code></pre>
+<h2 id="4-bedingungen-und-schleifen">4. Bedingungen und Schleifen</h2>
+<pre><code class="lang-volt">fn main()
+    for i in 1..16
+        if i % 15 == 0
+            print(&quot;FizzBuzz&quot;)
+        else if i % 3 == 0
+            print(&quot;Fizz&quot;)
+        else if i % 5 == 0
+            print(&quot;Buzz&quot;)
+        else
+            print(i)
+    var n = 1
+    while n &lt; 100
+        n *= 2
+    print(n)</code></pre>
+<p><code>a..b</code> läuft von a bis b-1. <code>break</code> und <code>continue</code> gibt es auch.</p>
+<h2 id="5-listen-maps-und-texte">5. Listen, Maps und Texte</h2>
+<pre><code class="lang-volt">fn main()
+    let zahlen = [3, 1, 2]
+    zahlen.push(10)
+    print(zahlen.len())
+    for z in zahlen
+        print(z)
+
+    let alter = Map[str, int]()
+    alter[&quot;ana&quot;] = 30
+    print(alter[&quot;ana&quot;])
+    print(alter.get(&quot;bo&quot;).or(0))
+
+    let satz = &quot;  Volt ist schnell  &quot;.trim()
+    print(satz.upper())
+    for wort in satz.split(&quot; &quot;)
+        print(wort)</code></pre>
+<p>Listen und Maps zeigen auf ihre Daten: wer eine Liste weitergibt, teilt sie.</p>
+<h2 id="6-eigene-typen-struct">6. Eigene Typen: struct</h2>
+<pre><code class="lang-volt">struct Spieler
+    name: str
+    leben: int = 100
+
+    fn treffer(mut self, schaden: int)
+        self.leben -= schaden
+
+    fn lebt(self) -&gt; bool
+        return self.leben &gt; 0
+
+fn main()
+    var s = Spieler(&quot;Ana&quot;)
+    s.treffer(30)
+    print(&quot;{s.name}: {s.leben}, lebt: {s.lebt()}&quot;)</code></pre>
+<p><code>mut self</code> darf Felder ändern, <code>self</code> nur lesen. Structs werden beim Zuweisen kopiert.</p>
+<h2 id="7-auswahl-enum-und-match">7. Auswahl: enum und match</h2>
+<pre><code class="lang-volt">enum Form
+    Kreis(radius: f64)
+    Rechteck(b: f64, h: f64)
+    Punkt
+
+fn flaeche(f: Form) -&gt; f64
+    match f
+        Kreis(r) =&gt; 3.14159 * r * r
+        Rechteck(b, h) =&gt; b * h
+        Punkt =&gt; 0.0
+
+fn main()
+    print(flaeche(Form.Kreis(2.0)))
+    print(flaeche(Form.Rechteck(3.0, 4.0)))</code></pre>
+<p><code>match</code> muss alle Fälle abdecken – der Compiler sagt dir, welcher fehlt.</p>
+<h2 id="8-fehlendes-und-fehler-t-und-t">8. Fehlendes und Fehler: <code>T?</code> und <code>T!</code></h2>
+<pre><code class="lang-volt">fn finde(zahlen: List[int], gesucht: int) -&gt; int?
+    for i in 0..zahlen.len()
+        if zahlen[i] == gesucht
+            return i
+    return none
+
+fn teile(a: int, b: int) -&gt; int!
+    if b == 0
+        return error(&quot;durch null&quot;)
+    return a / b
+
+fn rechne() -&gt; int!
+    let x = teile(10, 2)?
+    return x + teile(9, 3)?
+
+fn main()
+    if let i = finde([5, 6, 7], 7)
+        print(&quot;gefunden bei {i}&quot;)
+    let r = rechne() else fehler
+        print(fehler)
+        return
+    print(r)</code></pre>
+<p><code>T?</code> ist ein Wert oder <code>none</code>, <code>T!</code> ein Wert oder ein Fehlertext. <code>?</code> gibt Fehler nach oben weiter, <code>let x = … else</code> fängt sie ab, <code>.or(ersatz)</code> gibt einen Ersatzwert.</p>
+<h2 id="9-module-und-standardbibliothek">9. Module und Standardbibliothek</h2>
+<pre><code class="lang-volt">use liste
+use text
+use mathe
+
+fn main()
+    let xs = [5, 2, 9, 1]
+    liste.sortiere(xs)
+    print(xs[0])
+    print(text.fuelle_links(&quot;7&quot;, 3))
+    print(mathe.ggt(12, 18))</code></pre>
+<p>Eingebaut: <code>liste</code>, <code>text</code>, <code>mathe</code>, <code>zeit</code>, <code>web</code>. Eigene Module: <code>use geo</code> lädt <code>geo.vt</code> neben deinem Programm.</p>
+<h2 id="10-funktionen-als-werte-und-closures">10. Funktionen als Werte und Closures</h2>
+<pre><code class="lang-volt">use liste
+
+fn mal(faktor: int) -&gt; fn(int) -&gt; int
+    return fn(x: int) -&gt; int =&gt; x * faktor
+
+fn main()
+    let verdopple = mal(2)
+    print(verdopple(21))
+    let zahlen = [1, 2, 3, 4]
+    print(liste.abbilden(zahlen, fn(x: int) =&gt; x * x).len())
+    print(liste.falte(zahlen, 0, fn(summe: int, x: int) =&gt; summe + x))</code></pre>
+<p><code>fn(x: int) =&gt; ausdruck</code> ist eine Funktion ohne Namen; sie nimmt benutzte Variablen als Kopie mit.</p>
+<h2 id="11-generics-und-traits">11. Generics und Traits</h2>
+<pre><code class="lang-volt">trait Flaeche
+    fn flaeche(self) -&gt; f64
+
+struct Quadrat
+    seite: f64
+
+    fn flaeche(self) -&gt; f64
+        return self.seite * self.seite
+
+fn groesser[T](a: T, b: T) -&gt; T
+    if a &lt; b
+        return b
+    return a
+
+fn zeige[T: Flaeche](x: T)
+    print(x.flaeche())
+
+struct Kiste[T]
+    inhalt: T
+
+fn main()
+    print(groesser(3, 9))
+    print(groesser(&quot;a&quot;, &quot;b&quot;))
+    zeige(Quadrat(3.0))
+    let k = Kiste(&quot;Überraschung&quot;)
+    print(k.inhalt)</code></pre>
+<h2 id="12-aufräumen-und-testen">12. Aufräumen und Testen</h2>
+<pre><code class="lang-volt">fn quadrat(n: int) -&gt; int
+    return n * n
+
+fn main()
+    defer print(&quot;fertig&quot;)
+    print(quadrat(7))
+
+test &quot;quadrat&quot;
+    assert(quadrat(3) == 9)</code></pre>
+<p><code>defer</code> läuft beim Verlassen des Blocks. <code>volt test datei.vt</code> führt alle <code>test</code>-Blöcke aus.</p>
+<h2 id="13-c-bibliotheken">13. C-Bibliotheken</h2>
+<pre><code class="lang-volt">import c &quot;math.h&quot; as m
+
+fn main()
+    print(m.hypot(3.0, 4.0))
+    print(m.M_PI)</code></pre>
+<p>Funktionen und Zahlenkonstanten aus C-Headern stehen direkt zur Verfügung.</p>
+<h2 id="14-im-browser">14. Im Browser</h2>
+<pre><code class="lang-volt">use web
+
+var zaehler = 0
+
+fn erhoehen()
+    zaehler += 1
+    web.setze_text(&quot;#zahl&quot;, &quot;{zaehler}&quot;)
+
+fn main()
+    web.setze_html(&quot;#app&quot;, &quot;&lt;p id=&#x27;zahl&#x27;&gt;0&lt;/p&gt;&lt;button id=&#x27;knopf&#x27;&gt;+1&lt;/button&gt;&quot;)
+    web.klick(&quot;#knopf&quot;, erhoehen)</code></pre>
+<pre><code class="lang-sh">volt serve zaehler.vt        # öffnet http://localhost:8000, lädt bei jeder Änderung neu
+volt build zaehler.vt --target web</code></pre>
+<h2 id="weiter">Weiter</h2>
+<p>Die ganze Sprache steht in <a href="spec.html">SPEC.md</a>, die Entscheidungen dahinter in <a href="entscheidungen.html">DECISIONS.md</a>, Beispiele in <code>examples/</code>. Für Editoren gibt es <code>volt lsp</code> und das VS-Code-Addon in <code>editors/vscode/</code>.</p></main><footer>Volt – schnell wie C, lesbar wie Python</footer></body></html>

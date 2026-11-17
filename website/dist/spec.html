@@ -1,0 +1,55 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Volt – Sprache</title><style>:root{--bg:#fbfaf7;--fg:#1d1b18;--mut:#6b655c;--acc:#d97a00;--code:#f1eee7;--line:#e3ded3}
+@media(prefers-color-scheme:dark){:root{--bg:#14120f;--fg:#ece7dc;--mut:#9b9488;--acc:#ffb347;--code:#201d18;--line:#322e27}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 Georgia,'Iowan Old Style',serif}
+header{border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+nav{max-width:860px;margin:auto;padding:12px 16px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-family:system-ui,sans-serif;font-size:15px}
+nav b{font-size:19px;margin-right:auto;color:var(--acc)}nav a{color:var(--mut);text-decoration:none}nav a.on,nav a:hover{color:var(--fg)}
+main{max-width:860px;margin:auto;padding:8px 16px 80px}h1,h2,h3{font-family:system-ui,sans-serif;line-height:1.25;margin-top:2em}h1{font-size:2.2em;margin-top:1em}
+a{color:var(--acc)}code{font:0.88em ui-monospace,Menlo,Consolas,monospace;background:var(--code);padding:.1em .35em;border-radius:4px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;line-height:1.5}pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font:15px system-ui,sans-serif;display:block;overflow-x:auto}td,th{border:1px solid var(--line);padding:6px 10px;text-align:left}th{background:var(--code)}
+footer{text-align:center;color:var(--mut);font:14px system-ui,sans-serif;padding:30px}</style></head><body><header><nav><b>⚡ Volt</b><a href="index.html" class="">Start</a><a href="tutorial.html" class="">Tutorial</a><a href="spec.html" class="on">Sprache</a><a href="entscheidungen.html" class="">Entscheidungen</a><a href="benchmarks.html" class="">Benchmarks</a></nav></header><main><h1 id="volt-sprachstand-phase-2">Volt – Sprachstand (Phase 2)</h1>
+<h2 id="dateien">Dateien</h2>
+<ul><li><code>.vt</code>: Programm. Auf oberster Ebene stehen <code>fn</code>, <code>struct</code>, <code>enum</code> und <code>use</code>; Start ist <code>fn main()</code> (oder <code>fn main() -&gt; !</code>).</li><li><code>.vts</code>: Volt Script. Zusätzlich dürfen Anweisungen oben stehen, sie laufen der Reihe nach. <code>fn main()</code> ist dort verboten. Eine erste Zeile <code>#!…</code> ist ein Kommentar.</li><li><code>use name</code> lädt <code>name.vt</code> aus demselben Ordner. Dessen Inhalt heißt dann <code>name.f(…)</code>, <code>name.Typ</code>, <code>name.Typ.Fall</code>.</li></ul>
+<h2 id="lexik">Lexik</h2>
+<ul><li>Blöcke durch Einrückung (4 Leerzeichen), keine Tabs. Kommentare mit <code>#</code>. In <code>( )</code> und <code>[ ]</code> sind Zeilenumbrüche egal.</li><li>Zahlen <code>42</code>, <code>3.14</code>, <code>10_000</code>; Strings <code>"…"</code> mit <code>\n \t \\ \" \{ \}</code> und Einfügungen <code>"x = {x + 1}"</code>.</li></ul>
+<h2 id="typen">Typen</h2>
+<table><tr><th>Typ</th><th>Bedeutung</th></tr><tr><td><code>int</code>, <code>f64</code>, <code>bool</code>, <code>str</code></td><td>64-Bit-Ganzzahl (läuft über), Kommazahl, Wahrheitswert, Text</td></tr><tr><td><code>List[T]</code>, <code>Map[K, V]</code></td><td>Referenzen (Kopieren teilt den Inhalt); Schlüssel <code>int</code> oder <code>str</code></td></tr><tr><td><code>T?</code></td><td>Wert oder <code>none</code></td></tr><tr><td><code>T!</code></td><td>Wert oder Fehler (Text aus <code>error("…")</code>); <code>!</code> allein = nichts oder Fehler</td></tr><tr><td><code>struct</code>, <code>enum</code></td><td>eigene Typen; Structs sind Werte (Kopie)</td></tr></table>
+<p><code>int</code> wird automatisch zu <code>f64</code>, ein <code>T</code> automatisch zu <code>T?</code> und <code>T!</code>.</p>
+<h2 id="typen-definieren">Typen definieren</h2>
+<pre><code class="lang-">struct Player
+    name: str
+    hp: int = 100            # Standardwert
+    fn hit(mut self, dmg: int)   # mut self darf Felder ändern
+        self.hp -= dmg
+    fn alive(self) -&gt; bool
+        return self.hp &gt; 0
+
+enum Shape
+    Circle(radius: f64)
+    Rect(w: f64, h: f64)
+    Empty
+
+var p = Player(&quot;Ana&quot;)                 # Felder der Reihe nach …
+let q = Player(name: &quot;Bo&quot;, hp: 5)     # … oder mit Namen
+let s = Shape.Circle(2.0)</code></pre>
+<h2 id="anweisungen">Anweisungen</h2>
+<pre><code class="lang-">let x = 1 / var y: f64 = 0            # unveränderlich / veränderlich, kein Shadowing
+y = 2; y += 1; p.hp -= 3; xs[0] = 1; m[&quot;a&quot;] = 2
+if a … else if b … else …
+if let v = optional … else …          # nur wenn ein Wert da ist
+let v = f() else err                  # sonst: Block, der return/break/continue macht; err = Fehlertext bei T!
+while cond … / for i in 0..n … / for x in liste …
+break / continue / return [wert]
+defer aufruf(…)                       # läuft beim Verlassen des Blocks – auch bei return, break, continue und `?`;
+                                      # mehrere: zuletzt angemeldet zuerst; Werte werden erst dann ausgewertet
+match wert
+    Circle(r) =&gt; print(r)              # Enum-Fall mit Bindung
+    3 =&gt; …   &quot;ja&quot; =&gt; …   true =&gt; …     # Literale
+    _ =&gt; …                             # Rest</code></pre>
+<p><code>match</code> muss alle Fälle abdecken. Steht es am Ende einer Funktion mit Rückgabewert, sind <code>Fall =&gt; ausdruck</code> Rückgaben.</p>
+<h2 id="ausdrücke">Ausdrücke</h2>
+<p><code>or</code> · <code>and</code> · <code>not</code> / Vergleiche (<code>&lt; &lt;= &gt; &gt;=</code> auch für <code>str</code>, nach Zeichen-Reihenfolge) · <code>+ -</code> · <code>* / %</code> · <code>-x</code> · Anhängsel <code>.feld .methode() (…) [i] ?</code></p>
+<ul><li><code>wert?</code> gibt <code>none</code> bzw. den Fehler an den Aufrufer weiter (die Funktion muss selbst <code>T?</code>/<code>T!</code> liefern).</li><li><code>/</code> und <code>%</code> durch 0, Index außerhalb, fehlender Map-Schlüssel → Abbruch mit Exit 101 und Zeile.</li><li>Ein <code>T!</code>-Ergebnis darf nicht still verworfen werden (<code>f()?</code> oder <code>let _ = f() else err</code>).</li></ul>
+<h2 id="eingebaut">Eingebaut</h2>
+<ul><li>Funktionen: <code>print(x)</code>, <code>input(prompt) -&gt; str?</code>, <code>error(text)</code>, <code>int(f64)</code>, <code>float(int)</code>, <code>exit(code)</code>.</li><li>Mathe: <code>sqrt sin cos tan exp log floor ceil</code> (f64), <code>pow(a, b)</code>, <code>atan2(y, x)</code>, <code>abs(x)</code>, <code>min(a, b)</code>, <code>max(a, b)</code> (int oder f64).</li><li><code>str</code>: <code>len upper lower trim contains starts_with ends_with split replace to_int to_f64</code></li><li><code>List[T]</code>: <code>len push pop remove insert clear contains join</code>; Literal <code>[1, 2]</code>, leer <code>List[int]()</code></li><li><code>Map[K, V]</code>: <code>len has get remove keys</code>; <code>m[k]</code> lesen/schreiben; leer <code>Map[str, int]()</code></li><li><code>T?</code>/<code>T!</code>: <code>.or(ersatz)</code></li></ul></main><footer>Volt – schnell wie C, lesbar wie Python</footer></body></html>

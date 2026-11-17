@@ -34,6 +34,10 @@ print("Summe = {summe}")
 
 `use http`: `http.diene(8080, behandle)` – Webserver mit einem Faden je Verbindung, 10 000 gleichzeitige Verbindungen getestet (`examples/http_server.vt`).
 
+## Website
+
+`python3 website/build.py` baut aus README und docs/ eine statische Seite nach `website/dist/` (Start, Tutorial, Sprache, Entscheidungen, Benchmarks; hell/dunkel, mobil lesbar).
+
 ## Lernen
 
 [docs/TUTORIAL.md](docs/TUTORIAL.md): „Lerne Volt in einer Stunde“ – 14 kurze Kapitel, jedes Beispiel wird automatisch getestet.

@@ -1,0 +1,53 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Volt – Start</title><style>:root{--bg:#fbfaf7;--fg:#1d1b18;--mut:#6b655c;--acc:#d97a00;--code:#f1eee7;--line:#e3ded3}
+@media(prefers-color-scheme:dark){:root{--bg:#14120f;--fg:#ece7dc;--mut:#9b9488;--acc:#ffb347;--code:#201d18;--line:#322e27}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 Georgia,'Iowan Old Style',serif}
+header{border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:2}
+nav{max-width:860px;margin:auto;padding:12px 16px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-family:system-ui,sans-serif;font-size:15px}
+nav b{font-size:19px;margin-right:auto;color:var(--acc)}nav a{color:var(--mut);text-decoration:none}nav a.on,nav a:hover{color:var(--fg)}
+main{max-width:860px;margin:auto;padding:8px 16px 80px}h1,h2,h3{font-family:system-ui,sans-serif;line-height:1.25;margin-top:2em}h1{font-size:2.2em;margin-top:1em}
+a{color:var(--acc)}code{font:0.88em ui-monospace,Menlo,Consolas,monospace;background:var(--code);padding:.1em .35em;border-radius:4px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;line-height:1.5}pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;font:15px system-ui,sans-serif;display:block;overflow-x:auto}td,th{border:1px solid var(--line);padding:6px 10px;text-align:left}th{background:var(--code)}
+footer{text-align:center;color:var(--mut);font:14px system-ui,sans-serif;padding:30px}</style></head><body><header><nav><b>⚡ Volt</b><a href="index.html" class="on">Start</a><a href="tutorial.html" class="">Tutorial</a><a href="spec.html" class="">Sprache</a><a href="entscheidungen.html" class="">Entscheidungen</a><a href="benchmarks.html" class="">Benchmarks</a></nav></header><main><h1 id="volt">Volt ⚡</h1>
+<p>Eine eigene Programmiersprache: lesbar wie Python, schnell wie C. Der Compiler ist in Rust geschrieben und erzeugt C, das tcc, gcc oder clang zu einem nativen Programm machen.</p>
+<table><tr><th>Endung</th><th>Was</th><th>Start</th></tr><tr><td><code>.vt</code></td><td>Volt-Programm, beginnt in <code>fn main()</code></td><td><code>volt run prog.vt</code></td></tr><tr><td><code>.vts</code></td><td><strong>Volt Script</strong>: Code steht direkt oben und läuft von oben nach unten, wie JavaScript oder Python</td><td><code>volt skript.vts</code> oder <code>./skript.vts</code> mit <code>#!/usr/bin/env volt</code></td></tr></table>
+<pre><code class="lang-volt">#!/usr/bin/env volt
+fn quadrat(n: int) -&gt; int
+    return n * n
+
+var summe = 0
+for i in 1..101
+    summe += quadrat(i)
+print(&quot;Summe = {summe}&quot;)</code></pre>
+<h2 id="was-geht-schon-phase-2">Was geht schon (Phase 2)</h2>
+<p><code>struct</code> mit Methoden, <code>enum</code> mit Daten und <code>match</code>, Optionals <code>T?</code>, Fehler <code>T!</code> mit <code>?</code>, <code>List</code>, <code>Map</code>, String-Funktionen, Module mit <code>use</code>. Meilenstein: <a href="examples/abenteuer.vt">examples/abenteuer.vt</a>, ein Textadventure komplett in Volt (<code>volt run examples/abenteuer.vt</code>).</p>
+<h2 id="web-phase-5-stand">Web (Phase 5, Stand)</h2>
+<p><code>volt build x.vt --target web</code> baut aus einem Volt-Programm eine fertige Seite (WebAssembly + <code>index.html</code>), <code>volt serve x.vt</code> liefert sie aus und lädt bei jeder Änderung neu. <code>use web</code> verbindet das Programm mit der Seite (<code>examples/web_zaehler.vt</code>, <code>examples/web_todo.vt</code> – beide im echten Browser getestet). Braucht clang mit WebAssembly-Unterstützung. Behandler sind Funktionswerte oder Closures (<code>web.klick("#plus", erhoehen)</code>, <code>web.klick("#t{i}", fn() =&gt; umschalten(i))</code>). Noch offen: Komponenten-Syntax mit HTML-Vorlagen.</p>
+<h2 id="fäden">Fäden</h2>
+<p><code>use faden</code>: <code>faden.starte(f)</code>, <code>faden.Kanal[T]()</code> mit <code>sende</code>/<code>empfange</code>, <code>schlafe</code>, <code>warte</code> – kooperativ unter einer Sperre, der Müllsammler arbeitet mit allen Fäden (<code>examples/faeden.vt</code>).</p>
+<h2 id="http">HTTP</h2>
+<p><code>use http</code>: <code>http.diene(8080, behandle)</code> – Webserver mit einem Faden je Verbindung, 10 000 gleichzeitige Verbindungen getestet (<code>examples/http_server.vt</code>).</p>
+<h2 id="lernen">Lernen</h2>
+<p><a href="tutorial.html">docs/TUTORIAL.md</a>: „Lerne Volt in einer Stunde“ – 14 kurze Kapitel, jedes Beispiel wird automatisch getestet.</p>
+<h2 id="editor">Editor</h2>
+<p><code>editors/vscode/</code>: VS-Code-Addon (Syntaxfarben, Fehler beim Tippen, Vervollständigung, Hover, Snippets, Formatieren, Befehle zum Ausführen/Testen). Bauen: <code>cd editors/vscode &amp;&amp; npm install &amp;&amp; python3 package-vsix.py</code>, installieren: <code>code --install-extension volt-lang-0.1.0.vsix</code>.</p>
+<h2 id="werkzeuge">Werkzeuge</h2>
+<p><code>volt lsp</code> ist ein Language-Server (Fehler beim Tippen, Vervollständigung, Hover) für Editoren.</p>
+<p><code>volt run</code> (mit <code>--watch</code>), <code>build [--release]</code>, <code>check</code> (nur prüfen), <code>test</code> (test-Blöcke mit <code>assert</code>), <code>fmt</code> (Leerraum aufräumen), <code>new &lt;name&gt; --template cli|game|lib</code>, <code>parse --ast</code>.</p>
+<h2 id="spiele-und-c-phase-4-stand">Spiele und C (Phase 4, Stand)</h2>
+<p><code>import c "math.h" as m</code> macht Funktionen und Zahlenkonstanten jedes C-Headers nutzbar (<code>examples/c_mathe.vt</code>), Operator-Überladung (<code>op +</code>) gibt es für eigene Typen (<code>examples/vektoren.vt</code>), <code>volt run --watch</code> baut bei jeder Änderung neu, und <code>examples/snake.vt</code> ist ein Snake im Terminal, das sich selbst spielt (läuft im Terminal mit Animation). Noch offen: Structs aus Headern (nötig für raylib), <code>std.math</code> als Bibliothek, <code>volt new --template game</code>.</p>
+<h2 id="speicher-und-tempo-phase-3-stand">Speicher und Tempo (Phase 3, Stand)</h2>
+<p>Ein Müllsammler in der Runtime gibt Strings, Listen und Maps frei (5 Mio. Strings: 16 MB statt 392 MB), ein Build-Cache übersetzt unveränderte Programme nicht neu (5 ms statt 22 ms), und <code>bench/run.sh</code> vergleicht Volt mit C, Go und Python – Ergebnisse in <a href="benchmarks.html">docs/BENCHMARKS.md</a>. Noch offen: <code>defer</code>, Ownership statt GC, parallele Übersetzung.</p>
+<h2 id="bauen-und-testen">Bauen und testen</h2>
+<pre><code class="lang-sh">cargo test                              # Lexer, Parser, Typen, C-Backend + alle Programme in examples/ und tests/
+cargo install --path cli                # `volt` nach ~/.cargo/bin
+volt run examples/fib.vt
+volt examples/hello.vts
+volt parse examples/fizzbuzz.vt --ast   # Syntaxbaum
+volt build examples/fib.vt --release -o fib</code></pre>
+<p>Gebraucht wird ein C-Compiler: tcc (am schnellsten zu bauen), gcc oder clang. Mit <code>VOLT_CC</code> legst du ihn selbst fest.</p>
+<h2 id="wie-schnell">Wie schnell?</h2>
+<p><code>fib(35)</code> rekursiv, gemessen auf pve2 inklusive Kompilieren und Start:</p>
+<table><tr><th></th><th>Zeit</th></tr><tr><td>Volt Script (<code>volt fib.vts</code>, tcc)</td><td>135 ms</td></tr><tr><td>Volt <code>--release</code> (gcc -O2, nur Laufzeit)</td><td>40 ms</td></tr><tr><td>Node.js</td><td>285 ms</td></tr><tr><td>Python (hochgerechnet aus fib(30))</td><td>≈ 2 200 ms</td></tr></table>
+<p>Ein kleines Skript ist in rund 15 ms übersetzt und gestartet.</p>
+<p>Mehr: <a href="spec.html">docs/SPEC.md</a> (Sprache), <a href="entscheidungen.html">docs/DECISIONS.md</a> (warum so), <a href="docs/VISION.md">docs/VISION.md</a> (das große Ziel).</p></main><footer>Volt – schnell wie C, lesbar wie Python</footer></body></html>
