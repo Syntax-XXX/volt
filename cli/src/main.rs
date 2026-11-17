@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
+mod cimport;
 use volt_parser::ast::{dump, Module};
 use volt_types::Unit;
 
@@ -118,6 +119,17 @@ fn frontend(path: &Path, check: bool) -> Result<Vec<Unit>, ()> {
         }
         i += 1;
     }
+    // C-Importe: Prototypen und Konstanten der Header einlesen
+    if check {
+        for (i, u) in units.iter_mut().enumerate() {
+            for ci in &mut u.module.c_imports {
+                match cimport::scan(&ci.header, dir) {
+                    Ok((funcs, consts)) => (ci.funcs, ci.consts) = (funcs, consts),
+                    Err(why) => diags.push((i, volt_lexer::Diag::new(ci.span, format!("der Header `{}` lässt sich nicht lesen: {why}", ci.header)).tip("liegt er in /usr/include oder neben der Datei?"))),
+                }
+            }
+        }
+    }
     if diags.is_empty() && check {
         diags = volt_types::check_program(&mut units);
     }
@@ -166,6 +178,10 @@ fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, 
         cmd.arg(&c_file).arg("-o").arg(&bin);
         if release {
             cmd.arg("-O2");
+        }
+        cmd.arg(format!("-I{}", path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")).display()));
+        for lib in units.iter().flat_map(|u| u.module.c_imports.iter().flat_map(|c| &c.libs)) {
+            cmd.arg(format!("-l{lib}"));
         }
         cmd.arg("-lm"); // sqrt, fabs
         if !cc.contains("tcc") {

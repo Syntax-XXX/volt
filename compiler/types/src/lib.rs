@@ -71,6 +71,8 @@ struct Checker {
     variants: HashMap<String, Vec<(String, Vec<FieldInfo>)>>,
     /// Freie Funktionen (`f`, `modul.f`) und Methoden (`Typ.m`).
     fns: HashMap<String, Sig>,
+    /// Konstanten aus C-Headern (`m.M_PI`), als Literal eingesetzt.
+    cconsts: HashMap<String, CConst>,
     unit: usize,
     /// Sichtbare Variablen, innerster Block zuletzt.
     scopes: Vec<HashMap<String, Var>>,
@@ -96,6 +98,7 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
         structs: HashMap::new(),
         variants: HashMap::new(),
         fns: HashMap::new(),
+        cconsts: HashMap::new(),
         unit: 0,
         scopes: Vec::new(),
         ret: Type::Void,
@@ -103,6 +106,18 @@ pub fn check_program(units: &mut [Unit]) -> Vec<(usize, Diag)> {
         diags: Vec::new(),
     };
     let names: HashSet<String> = units.iter().map(|u| u.name.clone()).collect();
+    // 0. C-Importe: Funktionen als `alias.name`, Konstanten als `alias.NAME`; der Alias zählt wie ein Modul.
+    for (ui, u) in units.iter().enumerate() {
+        for ci in &u.module.c_imports {
+            c.units[ui].1.insert(ci.alias.clone());
+            for f in &ci.funcs {
+                c.fns.insert(format!("{}.{}", ci.alias, f.name), Sig { this: None, params: f.params.clone(), ret: f.ret.clone() });
+            }
+            for (n, v) in &ci.consts {
+                c.cconsts.insert(format!("{}.{n}", ci.alias), *v);
+            }
+        }
+    }
     // 1. Typnamen, damit Felder und Signaturen sich auf alle Typen beziehen können.
     for (ui, u) in units.iter_mut().enumerate() {
         c.unit = ui;
@@ -1159,6 +1174,12 @@ impl Checker {
             ExprKind::Field(..) if path.is_some() => {
                 let segs = path.expect("geprüft");
                 let shown = segs.join(".");
+                if let Some(c) = (segs.len() == 2).then(|| self.cconsts.get(&shown)).flatten() {
+                    let c = *c;
+                    e.kind = match c { CConst::Int(n) => ExprKind::Int(n), CConst::Float(x) => ExprKind::Float(x) };
+                    e.ty = if matches!(c, CConst::Int(_)) { Type::Int } else { Type::F64 };
+                    return e.ty.clone();
+                }
                 match self.resolve_path(&segs) {
                     PathRes::Variant(key, index) if self.variants[&key][index].1.is_empty() => {
                         e.kind = ExprKind::Variant { key: key.clone(), index, args: Vec::new() };

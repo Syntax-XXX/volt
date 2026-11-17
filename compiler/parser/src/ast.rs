@@ -58,8 +58,34 @@ impl Type {
     }
 }
 
+/// Eine C-Funktion aus einem Header: nur Zahlen, Bool und Text kommen durch (`int`, `double`, `char*` …).
+#[derive(Debug, Clone)]
+pub struct CFunc {
+    pub name: String,
+    pub params: Vec<Type>,
+    pub ret: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CConst {
+    Int(i64),
+    Float(f64),
+}
+
+/// `import c "math.h" as m link "m"` – Funktionen und Konstanten füllt die CLI nach dem Parsen aus dem Header.
+#[derive(Debug, Clone)]
+pub struct CImport {
+    pub header: String,
+    pub alias: String,
+    pub libs: Vec<String>,
+    pub span: Span,
+    pub funcs: Vec<CFunc>,
+    pub consts: Vec<(String, CConst)>,
+}
+
 #[derive(Default)]
 pub struct Module {
+    pub c_imports: Vec<CImport>,
     pub uses: Vec<(String, Span)>,
     pub structs: Vec<StructDecl>,
     pub enums: Vec<EnumDecl>,
@@ -305,6 +331,9 @@ pub fn dump(m: &Module) -> String {
     let mut out = String::new();
     for (name, _) in &m.uses {
         out += &format!("use {name}\n");
+    }
+    for c in &m.c_imports {
+        out += &format!("import c \"{}\" as {}{}\n", c.header, c.alias, c.libs.iter().map(|l| format!(" link \"{l}\"")).collect::<String>());
     }
     for s in &m.structs {
         out += &format!("struct {}\n", s.name);

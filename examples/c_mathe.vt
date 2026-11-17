@@ -1,0 +1,14 @@
+# C-Import: Funktionen und Konstanten aus Headern, ohne Bindings zu schreiben.
+import c "math.h" as m
+import c "ctype.h" as ct
+import c "stdlib.h" as c
+
+fn main()
+    print(m.ldexp(1.5, 4))
+    print(m.hypot(3.0, 4.0))
+    print(m.M_PI)
+    print(m.fmod(10.5, 3.0))
+    print(ct.toupper(97))
+    print(ct.isdigit(53) != 0)
+    print(c.abs(-42))
+    print(c.atoi("123") + 1)

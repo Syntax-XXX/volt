@@ -1,0 +1,4 @@
+import c "math.h" as m
+
+fn main()
+    print(m.gibts_nicht(1.0))

@@ -1,0 +1,4 @@
+import c "gibt_es_nicht.h" as x
+
+fn main()
+    print(1)

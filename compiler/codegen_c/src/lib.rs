@@ -18,8 +18,13 @@ pub fn emit(m: &Module) -> String {
 
 /// Hauptprogramm (`mods[0]`, enthält `main`) samt Modulen. Erwartet einen fehlerfrei geprüften AST.
 pub fn emit_program(mods: &[&Module]) -> String {
-    let mut g = Gen { types: String::new(), protos: String::new(), body: String::new(), done: HashSet::new(), structs: HashMap::new(), enums: HashMap::new(), tmp: 0, mut_self: false, ret: Type::Void, defers: Vec::new(), loops: Vec::new() };
+    let mut g = Gen { types: String::new(), protos: String::new(), body: String::new(), done: HashSet::new(), structs: HashMap::new(), enums: HashMap::new(), tmp: 0, mut_self: false, ret: Type::Void, defers: Vec::new(), loops: Vec::new(), externs: HashMap::new() };
     for m in mods {
+        for ci in &m.c_imports {
+            for f in &ci.funcs {
+                g.externs.insert(format!("{}.{}", ci.alias, f.name), f.name.clone());
+            }
+        }
         for s in &m.structs {
             g.structs.insert(s.key.clone(), s);
         }
@@ -41,7 +46,11 @@ pub fn emit_program(mods: &[&Module]) -> String {
     } else {
         "\nint main(void) {\n    int volt_marker;\n    volt_gc_init(&volt_marker);\n    v_main();\n    return 0;\n}\n"
     };
-    format!("{RUNTIME}\n{}\n{}{}{main}", g.types, g.protos, g.body)
+    let mut includes: Vec<&str> = mods.iter().flat_map(|m| m.c_imports.iter().map(|c| c.header.as_str())).collect();
+    includes.sort();
+    includes.dedup();
+    let includes: String = includes.iter().map(|h| format!("#include \"{h}\"\n")).collect();
+    format!("{RUNTIME}\n{includes}\n{}\n{}{}{main}", g.types, g.protos, g.body)
 }
 
 fn is_res_void(t: &Type) -> bool {
@@ -145,6 +154,8 @@ struct Gen<'a> {
     defers: Vec<Vec<String>>,
     /// Länge von `defers` vor dem Rumpf der jeweils innersten Schleife.
     loops: Vec<usize>,
+    /// C-Funktionen aus Headern: `alias.name` → C-Name.
+    externs: HashMap<String, String>,
 }
 
 impl<'a> Gen<'a> {
@@ -646,7 +657,7 @@ impl<'a> Gen<'a> {
         match target {
             Target::Fn(key) => {
                 let ops = self.ops(args);
-                let f = fname(key);
+                let f = self.externs.get(key).cloned().unwrap_or_else(|| fname(key));
                 self.seq(ops, |v| format!("{f}({})", v.join(", ")))
             }
             Target::Method { key, this } => {

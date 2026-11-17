@@ -29,12 +29,13 @@ fn parse_mode(tokens: Vec<Token>, script: bool) -> (Module, Vec<Diag>) {
             Tok::Struct => p.struct_decl().map(|s| m.structs.push(s)),
             Tok::Enum => p.enum_decl().map(|e| m.enums.push(e)),
             Tok::Use => p.use_decl().map(|u| m.uses.push(u)),
+            Tok::Ident(n) if n == "import" => p.import_decl().map(|c| m.c_imports.push(c)),
             Tok::Dedent => Ok(()), // bleibt nur nach einem schon gemeldeten Fehler übrig
             Tok::Indent => Err(Diag::new(p.span(), "unerwartete Einrückung").tip("Funktionen beginnen ganz links, ohne Leerzeichen davor")),
             _ if script => p.stmt().map(|s| top.push(s)),
             _ => {
                 let d = Diag::new(p.span(), "auf oberster Ebene sind nur Funktionen, Typen und `use` erlaubt").tip("packe den Code in `fn main()` – oder schreibe ein Skript (.vts)");
-                while !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use | Tok::Eof) {
+                while !matches!(p.peek(), Tok::Fn | Tok::Struct | Tok::Enum | Tok::Use | Tok::Eof) && !matches!(p.peek(), Tok::Ident(n) if n == "import") {
                     p.i += 1;
                 }
                 Err(d)
@@ -183,6 +184,46 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// `import c "math.h" as m` (+ `link "m"` für Bibliotheken)
+    fn import_decl(&mut self) -> R<CImport> {
+        let span = self.span();
+        self.i += 1;
+        let kind = self.ident("`c`")?;
+        if kind.0 != "c" {
+            return Err(Diag::new(kind.1, "es gibt bisher nur `import c \"header.h\" as name`").tip("Volt-Dateien lädt `use name`"));
+        }
+        let header = match self.peek().clone() {
+            Tok::Str(parts) if matches!(parts.as_slice(), [StrPart::Lit(_)]) => {
+                self.i += 1;
+                let [StrPart::Lit(h)] = parts.as_slice() else { unreachable!() };
+                h.clone()
+            }
+            _ => return Err(self.unexpected("den Header als String, z. B. \"math.h\"")),
+        };
+        let word = |p: &mut Self, w: &str| -> R<()> {
+            match p.ident(&format!("`{w}`"))? {
+                (n, _) if n == w => Ok(()),
+                (_, at) => Err(Diag::new(at, format!("hier gehört `{w}` hin")).tip("z. B. `import c \"math.h\" as m`")),
+            }
+        };
+        word(self, "as")?;
+        let (alias, _) = self.ident("einen Namen für den Import")?;
+        let mut libs = Vec::new();
+        while matches!(self.peek(), Tok::Ident(n) if n == "link") {
+            self.i += 1;
+            match self.peek().clone() {
+                Tok::Str(parts) if matches!(parts.as_slice(), [StrPart::Lit(_)]) => {
+                    self.i += 1;
+                    let [StrPart::Lit(l)] = parts.as_slice() else { unreachable!() };
+                    libs.push(l.clone());
+                }
+                _ => return Err(self.unexpected("den Bibliotheksnamen als String, z. B. \"raylib\"")),
+            }
+        }
+        self.expect(Tok::Newline)?;
+        Ok(CImport { header, alias, libs, span, funcs: Vec::new(), consts: Vec::new() })
     }
 
     fn use_decl(&mut self) -> R<(String, Span)> {
