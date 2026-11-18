@@ -1,5 +1,6 @@
 //! Snapshot-Tests: jedes Programm in `examples/` und `tests/` (Unterordner: nur `main.vt`) wird gestartet.
 //! Ein Ordner mit `main.vt` ist ein Projekt mit Modulen (nur `main.vt` starten), sonst zählt jede Datei.
+//! Server-Programme (mit `http.diene`) laufen ewig und werden übersprungen; sie testet `http_server_antwortet_gleichzeitig`.
 //! `<datei>.out` = erwartete Ausgabe, `<datei>.in` = Eingabe, `<datei>.err` = erwarteter Text in stderr (dann Exit ≠ 0).
 use std::{fs, io::Write, path::Path, process::{Command, Stdio}};
 
@@ -11,7 +12,7 @@ fn programme(dir: &Path, out: &mut Vec<std::path::PathBuf>, top: bool) {
             if !path.ends_with(".volt-cache") {
                 programme(&path, out, false);
             }
-        } else if matches!(path.extension().and_then(|e| e.to_str()), Some("vt" | "vts")) && (!projekt || path.file_name().unwrap() == "main.vt") {
+        } else if matches!(path.extension().and_then(|e| e.to_str()), Some("vt" | "vts")) && (!projekt || path.file_name().unwrap() == "main.vt") && !fs::read_to_string(&path).map_or(false, |t| t.contains("http.diene")) {
             out.push(path);
         }
     }

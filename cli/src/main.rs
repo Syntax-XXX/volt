@@ -112,6 +112,7 @@ const STD: &[(&str, &str)] = &[
     ("web", include_str!("../../std/web.vt")),
     ("faden", include_str!("../../std/faden.vt")),
     ("http", include_str!("../../std/http.vt")),
+    ("datei", include_str!("../../std/datei.vt")),
 ];
 
 fn std_module(name: &str) -> Option<&'static str> {
@@ -160,7 +161,7 @@ fn load(path: &Path, src: String, check: bool, tests: bool) -> Result<Vec<Unit>,
             return Err((Vec::new(), Vec::new()));
         }
     };
-    let dir = path.parent().unwrap_or(Path::new(""));
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let (mut module, d) = lex_parse(&src, script);
     // `volt test` braucht kein `main`: ein leeres reicht für die Prüfung des Programms
     if tests && !module.fns.iter().any(|f| f.name == "main") {
@@ -230,7 +231,7 @@ fn compile(path: &Path, release: bool, out: Option<PathBuf>) -> Result<PathBuf, 
 fn compile_mode(path: &Path, release: bool, out: Option<PathBuf>, tests: bool) -> Result<(PathBuf, Vec<String>), ()> {
     let units = frontend(path, true, tests)?;
     let names = volt_codegen_c::test_names(&units.iter().map(|u| &u.module).collect::<Vec<_>>());
-    let cache = path.parent().unwrap_or(Path::new("")).join(".volt-cache");
+    let cache = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")).join(".volt-cache");
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let base = if tests { format!("{stem}.test") } else { stem.to_string() };
     let c_file = cache.join(format!("{base}.c"));

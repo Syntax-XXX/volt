@@ -1,4 +1,36 @@
 # std: Text. `use text` → text.wiederhole("ab", 3), text.fuelle_links("7", 3), text.ist_leer(s) …
+import c "volt_text.h" as t
+
+# `n` Bytes ab Position `von` (Zählung in Bytes; kürzt am Rand): text.teil("Hallo Welt", 6, 4) == "Welt"
+fn teil(s: str, von: int, n: int) -> str
+    return t.volt_text_teil(s, von, n)
+
+# Ab Position `von` bis zum Ende.
+fn ab(s: str, von: int) -> str
+    return t.volt_text_teil(s, von, s.len())
+
+# Erste Fundstelle von `gesucht` (Byte-Position) oder -1.
+fn suche(s: str, gesucht: str) -> int
+    return t.volt_text_suche(s, gesucht, 0)
+
+# Wie suche, beginnt aber erst bei Position `ab`.
+fn suche_ab(s: str, gesucht: str, start: int) -> int
+    return t.volt_text_suche(s, gesucht, start)
+
+# Text hinter dem ersten `trenner` (leer, wenn er fehlt): text.hinter("Host: a:8080", ":") == " a:8080"
+fn hinter(s: str, trenner: str) -> str
+    let i = t.volt_text_suche(s, trenner, 0)
+    if i < 0
+        return ""
+    return t.volt_text_teil(s, i + trenner.len(), s.len())
+
+# Byte an Position `i` (0–255) oder -1 außerhalb des Textes.
+fn byte_an(s: str, i: int) -> int
+    return t.volt_text_byte(s, i)
+
+# true, wenn der Text nicht leer ist und nur Zeichen aus `erlaubt` enthält: text.nur_aus("abc1", "abc123")
+fn nur_aus(s: str, erlaubt: str) -> bool
+    return t.volt_text_nur(s, erlaubt) != 0
 
 fn wiederhole(s: str, n: int) -> str
     var out = ""
@@ -16,11 +48,11 @@ fn fuelle_rechts(s: str, breite: int) -> str
 fn ist_leer(s: str) -> bool
     return s.trim().len() == 0
 
-# Wie oft kommt `teil` in `s` vor (ohne Überlappung)? Leerer Teil zählt 0.
-fn zaehle(s: str, teil: str) -> int
-    if teil.len() == 0
+# Wie oft kommt `muster` in `s` vor (ohne Überlappung)? Leerer Teil zählt 0.
+fn zaehle(s: str, muster: str) -> int
+    if muster.len() == 0
         return 0
-    return s.split(teil).len() - 1
+    return s.split(muster).len() - 1
 
 test "wiederhole und fuellen"
     assert(wiederhole("ab", 3) == "ababab")
@@ -34,3 +66,19 @@ test "leer und zaehle"
     assert(not ist_leer(" a "))
     assert(zaehle("abcabcab", "ab") == 3)
     assert(zaehle("abc", "") == 0)
+
+test "teil und suche"
+    assert(teil("Hallo Welt", 6, 4) == "Welt")
+    assert(teil("abc", 1, 99) == "bc")
+    assert(teil("abc", 9, 2) == "")
+    assert(ab("abcdef", 2) == "cdef")
+    assert(suche("a:b:c", ":") == 1)
+    assert(suche_ab("a:b:c", ":", 2) == 3)
+    assert(suche("abc", "x") == -1)
+    assert(hinter("Host: a:8080", ":") == " a:8080")
+    assert(hinter("kein", ":") == "")
+    assert(byte_an("A", 0) == 65)
+    assert(byte_an("A", 1) == -1)
+    assert(nur_aus("abc1", "abc123"))
+    assert(not nur_aus("abx", "abc123"))
+    assert(not nur_aus("", "abc"))

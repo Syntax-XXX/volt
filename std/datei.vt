@@ -1,0 +1,104 @@
+# std: Dateien, Zeit, Zufall und Hashes. `use datei`. Pfade sind Text; Fehler zeigen sich als false/-1/leerer Text (kein Absturz).
+# Nicht im Browser (WebAssembly). Alles blockierende gibt die gemeinsame Sperre frei, andere Fäden laufen weiter.
+use faden   # die Laufzeit der blockierenden Aufrufe (volt_thread.h) braucht den Faden-Einstieg
+import c "volt_fs.h" as f
+
+struct Eintrag
+    name: str
+    ordner: bool
+    groesse: int
+    geaendert: int
+
+fn existiert(pfad: str) -> bool
+    return f.volt_fs_art(pfad) != 0
+
+fn ist_datei(pfad: str) -> bool
+    return f.volt_fs_art(pfad) == 1
+
+fn ist_ordner(pfad: str) -> bool
+    return f.volt_fs_art(pfad) == 2
+
+fn groesse(pfad: str) -> int
+    return f.volt_fs_groesse(pfad)
+
+# Zeitpunkt der letzten Änderung (Sekunden seit 1970), -1 wenn es die Datei nicht gibt.
+fn geaendert(pfad: str) -> int
+    return f.volt_fs_geaendert(pfad)
+
+fn setze_zeit(pfad: str, zeit: int) -> bool
+    return f.volt_fs_setze_zeit(pfad, zeit) == 0
+
+# Jetzt, in Sekunden seit 1970 (Wanduhr).
+fn jetzt() -> int
+    return f.volt_fs_jetzt()
+
+# Legt den Ordner samt fehlender Eltern an; true auch, wenn es ihn schon gab.
+fn ordner_anlegen(pfad: str) -> bool
+    return f.volt_fs_ordner(pfad) == 0
+
+# Löscht eine Datei oder einen Ordner samt Inhalt.
+fn loesche(pfad: str) -> bool
+    return f.volt_fs_loesche(pfad) == 0
+
+fn benenne_um(von: str, nach: str) -> bool
+    return f.volt_fs_umbenennen(von, nach) == 0
+
+# Kopiert eine Datei oder einen Ordner samt Inhalt (Dateien über eine Zwischendatei, nie halb).
+fn kopiere(von: str, nach: str) -> bool
+    return f.volt_fs_kopiere(von, nach) == 0
+
+# Gesamtgröße aller Dateien in einem Ordner.
+fn ordnergroesse(pfad: str) -> int
+    return f.volt_fs_ordnergroesse(pfad)
+
+# Inhalt eines Ordners, Ordner zuerst, dann nach Name sortiert (ohne "." und "..").
+fn liste(pfad: str) -> List[Eintrag]
+    let aus = List[Eintrag]()
+    for zeile in f.volt_fs_liste(pfad).split("\n")
+        let t = zeile.split("\t")
+        if t.len() == 4
+            aus.push(Eintrag(t[0], t[1] == "2", t[2].to_int().or(0), t[3].to_int().or(0)))
+    return aus
+
+# Ganze Textdatei lesen (bis 64 MB); leer, wenn es sie nicht gibt.
+fn lies(pfad: str) -> str
+    return f.volt_fs_lies(pfad)
+
+# Text schreiben über eine Zwischendatei: ein Absturz hinterlässt nie eine halbe Datei.
+fn schreibe(pfad: str, text: str) -> bool
+    return f.volt_fs_schreibe(pfad, text) == 0
+
+# Umgebungsvariable, leer wenn nicht gesetzt.
+fn umgebung(name: str) -> str
+    return f.volt_fs_umgebung(name)
+
+# `n` Zufallsbytes aus dem Betriebssystem als Hex-Text (2n Zeichen); leer, falls keine Zufallsquelle da ist.
+fn zufall(n: int) -> str
+    return f.volt_fs_zufall(n)
+
+fn sha256(text: str) -> str
+    return f.volt_fs_sha256(text)
+
+# Passwort-Hash (PBKDF2-HMAC-SHA256, 64 Hex-Zeichen). Mit eigenem Salz je Passwort und vielen Runden (z. B. 100000).
+fn passwort_hash(passwort: str, salz: str, runden: int) -> str
+    return f.volt_fs_passwort(passwort, salz, runden)
+
+# Vergleich in gleichbleibender Zeit, für Passwörter und Tokens.
+fn gleich(a: str, b: str) -> bool
+    return f.volt_fs_gleich(a, b) != 0
+
+fn base64_dekodiere(text: str) -> str
+    return f.volt_fs_base64_dekodiere(text)
+
+fn url_dekodiere(text: str) -> str
+    return f.volt_fs_url_dekodiere(text)
+
+# Alles außer Buchstaben, Ziffern und -_.~/ wird %XX.
+fn url_kodiere(text: str) -> str
+    return f.volt_fs_url_kodiere(text)
+
+fn http_datum(zeit: int) -> str
+    return f.volt_fs_http_datum(zeit)
+
+fn iso_datum(zeit: int) -> str
+    return f.volt_fs_iso_datum(zeit)

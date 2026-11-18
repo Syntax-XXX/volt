@@ -1,8 +1,13 @@
 # std: HTTP-Server. `use http` → http.diene(8080, behandle) mit `fn behandle(a: http.Anfrage) -> http.Antwort`.
 # Jede Verbindung läuft in einem eigenen Faden (siehe faden): ein langsamer Client hält die anderen nicht auf.
-# Einfach gehalten: HTTP/1.1 ohne Keep-Alive (Connection: close), Kopf bis 16 KB, Inhalt bis 16 MB, Zeitlimit 15 s je Lesevorgang.
+# Einfach gehalten: HTTP/1.1 ohne Keep-Alive (Connection: close), Kopf bis 16 KB, Zeitlimit 15 s je Lesevorgang.
+# Inhalt: kleine Anfragen (außer PUT, bis 1 MB) kommen fertig als Text in `inhalt`. PUT und große Inhalte bleiben ungelesen, bis der
+# Handler `a.speichere_in(pfad)` (binärsicher, direkt auf die Platte, erst fertig dann sichtbar) oder `a.lies_inhalt()` aufruft.
+# Antworten können eine Datei direkt von der Platte schicken (`datei_antwort`, auch Teilbereiche für Range).
 use faden
+use datei
 import c "volt_net.h" as n
+import c "volt_text.h" as tx
 
 struct Anfrage
     methode: str
@@ -10,20 +15,44 @@ struct Anfrage
     anfrage: str       # Text hinter dem `?` (ohne `?`), sonst leer
     kopf: List[str]    # Kopfzeilen im Original ("Host: localhost")
     inhalt: str
+    fd: int = -1
+    laenge: int = 0    # Content-Length
+    peer: str = ""     # Adresse der Gegenstelle (hinter einem Proxy dessen Adresse: dann X-Forwarded-For lesen)
 
-    # Wert einer Kopfzeile (Name ohne Beachtung der Groß-/Kleinschreibung).
+    # Wert einer Kopfzeile (Name ohne Beachtung der Groß-/Kleinschreibung), ohne führende Leerzeichen.
     fn kopfzeile(self, name: str) -> str?
         let vorn = "{name.lower()}:"
         for z in self.kopf
             if z.lower().starts_with(vorn)
-                return z.replace(z.split(":")[0], "").replace(":", "").trim()
+                return tx.volt_text_teil(z, tx.volt_text_suche(z, ":", 0) + 1, z.len()).trim()
         return none
+
+    # Schickt "100 Continue", wenn der Client es verlangt hat (curl tut das bei großen Uploads).
+    fn sende_weiter(self)
+        let e = self.kopfzeile("expect").or("")
+        if e.lower().contains("100-continue")
+            n.volt_net_write(self.fd, "HTTP/1.1 100 Continue\r\n\r\n")
+
+    # Liest den ganzen Inhalt als Text (höchstens 16 MB, am ersten NUL-Byte abgeschnitten). Für Dateien: speichere_in.
+    fn lies_inhalt(self) -> str
+        if self.inhalt.len() > 0 or self.laenge == 0
+            return self.inhalt
+        self.sende_weiter()
+        return n.volt_net_read_body(self.fd, self.laenge)
+
+    # Schreibt den Inhalt binärsicher nach `ziel` (Zwischendatei, am Ende umbenannt). false bei Abbruch oder vollem Datenträger.
+    fn speichere_in(self, ziel: str) -> bool
+        self.sende_weiter()
+        return n.volt_net_body_to_file(self.fd, self.laenge, ziel) == self.laenge
 
 struct Antwort
     status: int = 200
     typ: str = "text/plain; charset=utf-8"
     inhalt: str = ""
     extra: List[str] = List[str]()   # weitere Kopfzeilen, z. B. "Cache-Control: no-store"
+    datei_pfad: str = ""             # nicht leer: diese Datei (oder ein Bereich davon) wird statt `inhalt` geschickt
+    von: int = 0                     # erstes Byte des Bereichs
+    bis: int = -1                    # letztes Byte (einschließlich), -1 = bis zum Ende
 
 fn text(inhalt: str) -> Antwort
     return Antwort(200, "text/plain; charset=utf-8", inhalt)
@@ -40,6 +69,13 @@ fn fehler(status: int, meldung: str) -> Antwort
 fn weiter_zu(ziel: str) -> Antwort
     return Antwort(302, "text/plain; charset=utf-8", "weiter zu {ziel}", ["Location: {ziel}"])
 
+# Schickt eine Datei von der Platte; `typ` ist der Content-Type. Teilbereiche: Antwort selbst bauen (status 206, von, bis).
+fn datei_antwort(pfad: str, typ: str) -> Antwort
+    return Antwort(200, typ, "", List[str](), pfad, 0, -1)
+
+fn leer(status: int) -> Antwort
+    return Antwort(status, "text/plain; charset=utf-8", "")
+
 fn statustext(status: int) -> str
     if status == 200
         return "OK"
@@ -47,41 +83,83 @@ fn statustext(status: int) -> str
         return "Created"
     if status == 204
         return "No Content"
+    if status == 206
+        return "Partial Content"
+    if status == 207
+        return "Multi-Status"
+    if status == 301
+        return "Moved Permanently"
     if status == 302
         return "Found"
+    if status == 303
+        return "See Other"
+    if status == 304
+        return "Not Modified"
     if status == 400
         return "Bad Request"
+    if status == 401
+        return "Unauthorized"
+    if status == 403
+        return "Forbidden"
     if status == 404
         return "Not Found"
     if status == 405
         return "Method Not Allowed"
+    if status == 409
+        return "Conflict"
+    if status == 412
+        return "Precondition Failed"
     if status == 413
         return "Payload Too Large"
+    if status == 415
+        return "Unsupported Media Type"
+    if status == 416
+        return "Range Not Satisfiable"
+    if status == 423
+        return "Locked"
+    if status == 429
+        return "Too Many Requests"
     if status == 500
         return "Internal Server Error"
+    if status == 502
+        return "Bad Gateway"
+    if status == 507
+        return "Insufficient Storage"
     return "Status"
 
-fn senden(fd: int, a: Antwort)
-    var kopf = "HTTP/1.1 {a.status} {statustext(a.status)}\r\nContent-Type: {a.typ}\r\nContent-Length: {a.inhalt.len()}\r\nConnection: close\r\n"
+fn senden(fd: int, a: Antwort, nur_kopf: bool)
+    var laenge = a.inhalt.len()
+    var bis = a.bis
+    if a.datei_pfad.len() > 0
+        let gesamt = datei.groesse(a.datei_pfad)
+        if gesamt < 0
+            senden(fd, fehler(404, "nicht gefunden"), nur_kopf)
+            return
+        if bis < 0 or bis >= gesamt
+            bis = gesamt - 1
+        laenge = max(0, bis - a.von + 1)
+    var kopf = "HTTP/1.1 {a.status} {statustext(a.status)}\r\nContent-Type: {a.typ}\r\nContent-Length: {laenge}\r\nConnection: close\r\n"
     for z in a.extra
         kopf = "{kopf}{z}\r\n"
+    if nur_kopf
+        n.volt_net_write(fd, "{kopf}\r\n")
+        return
+    if a.datei_pfad.len() > 0
+        n.volt_net_write(fd, "{kopf}\r\n")
+        n.volt_net_send_file(fd, a.datei_pfad, a.von, bis)
+        return
     n.volt_net_write(fd, "{kopf}\r\n{a.inhalt}")
 
 # Eine Verbindung: Anfrage lesen, `behandle` aufrufen, Antwort schicken, schließen.
 fn bediene(fd: int, behandle: fn(Anfrage) -> Antwort)
-    let roh = n.volt_net_read_head(fd)
-    if roh.len() == 0
+    let kopfteil = n.volt_net_read_head(fd)
+    if kopfteil.len() == 0
         n.volt_net_close(fd)
         return
-    let teile = roh.split("\r\n\r\n")
-    let kopfteil = teile[0]
-    var inhalt = ""
-    if teile.len() > 1
-        inhalt = roh.replace("{kopfteil}\r\n\r\n", "")
     let zeilen = kopfteil.split("\r\n")
     let erste = zeilen[0].split(" ")
     if erste.len() < 2
-        senden(fd, fehler(400, "ungültige Anfrage"))
+        senden(fd, fehler(400, "ungültige Anfrage"), false)
         n.volt_net_close(fd)
         return
     let ziel = erste[1].split("?")
@@ -91,16 +169,13 @@ fn bediene(fd: int, behandle: fn(Anfrage) -> Antwort)
     let kopf = List[str]()
     for i in 1..zeilen.len()
         kopf.push(zeilen[i])
-    let a = Anfrage(erste[0], ziel[0], anfrage, kopf, inhalt)
+    var a = Anfrage(erste[0], ziel[0], anfrage, kopf, "", fd, 0, n.volt_net_peer(fd))
     let laenge = a.kopfzeile("content-length").or("0").to_int().or(0)
-    if laenge > 16777216
-        senden(fd, fehler(413, "zu groß"))
-        n.volt_net_close(fd)
-        return
-    var voll = a
-    if laenge > inhalt.len()
-        voll = Anfrage(erste[0], ziel[0], anfrage, kopf, "{inhalt}{n.volt_net_read_body(fd, laenge - inhalt.len())}")
-    senden(fd, behandle(voll))
+    a = Anfrage(erste[0], ziel[0], anfrage, kopf, "", fd, max(0, laenge), a.peer)
+    if erste[0] != "PUT" and laenge > 0 and laenge <= 1048576
+        a.sende_weiter()
+        a = Anfrage(erste[0], ziel[0], anfrage, kopf, n.volt_net_read_body(fd, laenge), fd, laenge, a.peer)
+    senden(fd, behandle(a), erste[0] == "HEAD")
     n.volt_net_close(fd)
 
 # Startet den Server und kehrt nie zurück. `nur_lokal`: nur von diesem Rechner erreichbar.
