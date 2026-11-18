@@ -53,6 +53,8 @@ struct Antwort
     datei_pfad: str = ""             # nicht leer: diese Datei (oder ein Bereich davon) wird statt `inhalt` geschickt
     von: int = 0                     # erstes Byte des Bereichs
     bis: int = -1                    # letztes Byte (einschließlich), -1 = bis zum Ende
+    zip_basis: str = ""              # nicht leer: ZIP-Archiv der Pfade in `zip_liste` (relativ zu diesem Ordner) wird gestreamt
+    zip_liste: str = ""              # Pfade, durch Zeilenumbruch getrennt (Ordner enden auf /)
 
 fn text(inhalt: str) -> Antwort
     return Antwort(200, "text/plain; charset=utf-8", inhalt)
@@ -72,6 +74,10 @@ fn weiter_zu(ziel: str) -> Antwort
 # Schickt eine Datei von der Platte; `typ` ist der Content-Type. Teilbereiche: Antwort selbst bauen (status 206, von, bis).
 fn datei_antwort(pfad: str, typ: str) -> Antwort
     return Antwort(200, typ, "", List[str](), pfad, 0, -1)
+
+# ZIP-Archiv aus Dateien/Ordnern unterhalb von `basis` (`liste`: ein Pfad je Zeile, Ordner mit Endschrägstrich). Wird direkt von der Platte gestreamt.
+fn zip_antwort(basis: str, liste: str, extra: List[str]) -> Antwort
+    return Antwort(200, "application/zip", "", extra, "", 0, -1, basis, liste)
 
 fn leer(status: int) -> Antwort
     return Antwort(status, "text/plain; charset=utf-8", "")
@@ -130,6 +136,18 @@ fn statustext(status: int) -> str
 fn senden(fd: int, a: Antwort, nur_kopf: bool)
     var laenge = a.inhalt.len()
     var bis = a.bis
+    if a.zip_basis.len() > 0
+        let zl = n.volt_net_zip_laenge(a.zip_basis, a.zip_liste)
+        if zl < 0
+            senden(fd, fehler(413, "zu groß für ein ZIP (höchstens 4 GB, 65534 Dateien)"), nur_kopf)
+            return
+        var zk = "HTTP/1.1 {a.status} {statustext(a.status)}\r\nContent-Type: application/zip\r\nContent-Length: {zl}\r\nConnection: close\r\n"
+        for z in a.extra
+            zk = "{zk}{z}\r\n"
+        n.volt_net_write(fd, "{zk}\r\n")
+        if not nur_kopf
+            n.volt_net_zip_senden(fd, a.zip_basis, a.zip_liste)
+        return
     if a.datei_pfad.len() > 0
         let gesamt = datei.groesse(a.datei_pfad)
         if gesamt < 0

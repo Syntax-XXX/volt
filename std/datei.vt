@@ -47,6 +47,10 @@ fn benenne_um(von: str, nach: str) -> bool
 fn kopiere(von: str, nach: str) -> bool
     return f.volt_fs_kopiere(von, nach) == 0
 
+# Zweiter Name für dieselbe Datei (harter Link, kostet keinen Platz); sonst Kopie. Die Datei überlebt, auch wenn ihr erster Name überschrieben wird.
+fn verlinke(von: str, nach: str) -> bool
+    return f.volt_fs_verlinke(von, nach) == 0
+
 # Gesamtgröße aller Dateien in einem Ordner.
 fn ordnergroesse(pfad: str) -> int
     return f.volt_fs_ordnergroesse(pfad)
@@ -78,6 +82,10 @@ fn zufall(n: int) -> str
 
 fn sha256(text: str) -> str
     return f.volt_fs_sha256(text)
+
+# SHA-256 des Dateiinhalts (64 Hex-Zeichen), leer wenn die Datei nicht lesbar ist. Für große Dateien geeignet (liest in Stücken).
+fn sha256_datei(pfad: str) -> str
+    return f.volt_fs_sha256_datei(pfad)
 
 # Passwort-Hash (PBKDF2-HMAC-SHA256, 64 Hex-Zeichen). Mit eigenem Salz je Passwort und vielen Runden (z. B. 100000).
 fn passwort_hash(passwort: str, salz: str, runden: int) -> str

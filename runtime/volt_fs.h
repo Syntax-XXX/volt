@@ -111,6 +111,9 @@ static int volt_fs_kopiere_rek(const char* a, const char* b) {
 }
 static int volt_fs_kopiere(const char* a, const char* b) { VOLT_FS_BLOCK_BEGIN; int rc = volt_fs_kopiere_rek(a, b); VOLT_FS_BLOCK_END; return rc; }
 
+// Harter Link (kostet nichts, auch bei riesigen Dateien); geht das nicht (anderes Dateisystem), wird kopiert.
+static int volt_fs_verlinke(const char* a, const char* b) { if (link(a, b) == 0) return 0; return volt_fs_kopiere(a, b); }
+
 static long long volt_fs_ordnergroesse_rek(const char* p) {
     struct stat st;
     if (lstat(p, &st) != 0) return 0;
@@ -271,6 +274,27 @@ static const char* volt_fs_sha256(const char* text) {
     volt_sha256((const unsigned char*)text, strlen(text), d);
     char* out = volt_str_alloc(64);
     volt_hex(d, 32, out);
+    return out;
+}
+
+// SHA-256 des Inhalts einer Datei (Hex), leer bei Fehler. Liest in Stücken und gibt dabei die Sperre frei.
+static const char* volt_fs_sha256_datei(const char* p) {
+    int fd = open(p, O_RDONLY);
+    if (fd < 0) return "";
+    volt_sha s; volt_sha_init(&s);
+    unsigned char* buf = malloc(65536);
+    int fehler = buf == NULL;
+    while (!fehler) {
+        ssize_t r;
+        { VOLT_FS_BLOCK_BEGIN; r = read(fd, buf, 65536); VOLT_FS_BLOCK_END; }
+        if (r == 0) break;
+        if (r < 0) { fehler = 1; break; }
+        volt_sha_add(&s, buf, (size_t)r);
+    }
+    close(fd); free(buf);
+    if (fehler) return "";
+    unsigned char d[32]; volt_sha_end(&s, d);
+    char* out = volt_str_alloc(64); volt_hex(d, 32, out);
     return out;
 }
 
